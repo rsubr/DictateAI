@@ -17,7 +17,7 @@
 - [x] M3 Model download/delete manager (compileDebugKotlin + 9 JVM tests green; not run on a device)
 - [x] M4 Audio + streaming STT (JVM-tested with fake engine; not tested on device)
 - [x] M5 Cleanup + UI + history (compiles; not run on device)
-- [x] M6 Integration, APK, report (APK: dist/voiceclean-debug.apk; nothing run on a device)
+- [x] M6 Integration, APK, report (APK: dist/DictateAI-release.apk; nothing run on a device)
 - [ ] M7 (future) QNN / OpenCL backends. Whisper-on-NPU research done: see docs/WHISPER_QNN.md (proposal D37: ggml-hexagon route first; not implemented)
 
 ## Models API (M3) - for other modules
@@ -85,7 +85,7 @@ Then Phase C integration (M6): replace fakes in AppContainer.
 - Manifest: largeHeap removed; merged manifest has `extractNativeLibs="true"` (from useLegacyPackaging); all 7 ggml CPU variants + libllama/libggml/libvoiceclean_jni in APK (whisper is linked into libvoiceclean_jni).
 - Diagnostics (D24): `diag/DebugLog` (ring + `filesDir/debug.log`, uncaught exceptions), native ggml/llama/whisper log ring buffer (`NativeBridge.nativeLogText()`), `NativeBridge.systemInfo()` (ggml CPU features of the chosen variant), `diag/Diagnostics` (device/SoC/ABI/RAM, engine states, full report, self-test), Settings > Diagnostics UI (Copy debug log, Self-test).
 - DECISIONS renumbered: D12-D15 (UI/audio), D16-D20 (Native/Models), D21-D25 new. D13 marked superseded.
-- Build: `flock /tmp/voiceclean-gradle.lock ./gradlew testDebugUnitTest assembleDebug` green (all JVM tests pass). APK copied to dist/voiceclean-debug.apk; dist/INSTALL.md written.
+- Build: `flock /tmp/voiceclean-gradle.lock ./gradlew testDebugUnitTest assembleDebug` green (all JVM tests pass). APK copied to dist/DictateAI-release.apk; dist/INSTALL.md written.
 
 ### Verified (by build/tests/code reading only)
 - Compiles, links, JVM unit tests pass; JNI symbols present; APK contents/manifest as above.

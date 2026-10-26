@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -14,10 +16,13 @@ android {
         applicationId = "com.voiceclean.app"
         minSdk = 31
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
 
-        ndk { abiFilters += "arm64-v8a" }
+        ndk {
+            abiFilters += "arm64-v8a"
+            debugSymbolLevel = "NONE" // no native debug symbols in release outputs
+        }
         externalNativeBuild {
             cmake {
                 arguments += listOf("-DANDROID_STL=c++_shared")
@@ -34,11 +39,28 @@ android {
         }
     }
 
+    // Release signing: keystore.properties (local, gitignored) or environment variables (CI).
+    // Keys: storeFile, storePassword, keyAlias, keyPassword  /  env KEYSTORE_FILE, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD.
+    val keystoreProps = Properties().apply {
+        rootProject.file("keystore.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
+    }
+    fun signing(prop: String, env: String): String? = keystoreProps.getProperty(prop) ?: System.getenv(env)
+    val releaseStore = signing("storeFile", "KEYSTORE_FILE")
+    signingConfigs {
+        if (releaseStore != null) create("release") {
+            storeFile = file(releaseStore)
+            storePassword = signing("storePassword", "KEYSTORE_PASSWORD")
+            keyAlias = signing("keyAlias", "KEY_ALIAS")
+            keyPassword = signing("keyPassword", "KEY_PASSWORD")
+        }
+    }
+
     buildTypes {
-        debug { isDebuggable = true } // signed with the default debug keystore
         release {
-            isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug") // installable release for convenience
+            isDebuggable = false
+            isMinifyEnabled = false // JNI/ExecuTorch reflection; not verified with R8 on a device
+            packaging.jniLibs.keepDebugSymbols.clear() // strip native libs
+            signingConfig = signingConfigs.findByName("release")
         }
     }
     compileOptions {

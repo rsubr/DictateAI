@@ -1,11 +1,11 @@
 # VoiceClean (debug build) - install and first run
 
-APK: `voiceclean-debug.apk` (about 65 MB, debug-signed, arm64-v8a, Android 12+).
+APK: `DictateAI-release.apk` (about 65 MB, debug-signed, arm64-v8a, Android 12+).
 
 ## Install
 **With adb (USB debugging on):**
 ```
-adb install -r voiceclean-debug.apk
+adb install -r DictateAI-release.apk
 ```
 **Sideload:** copy the APK to the phone, open it in Files, and allow "Install unknown apps" for that file manager
 (Settings > Apps > Special access > Install unknown apps). If Play Protect warns, choose "Install anyway".
