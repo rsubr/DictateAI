@@ -14,17 +14,25 @@
 - [x] M0 Toolchain (NDK 27.2.12479018, CMake 3.22.1, Gradle 8.10.2 wrapper, AGP 8.7.3, Kotlin 2.0.21)
 - [x] M1 Scaffold (assembleDebug verified; see docs/BUILD.md)
 - [x] M2 Native (llama.cpp + whisper.cpp JNI) — compiled/linked for arm64-v8a; NOT run on a device or host (see Known issues)
-- [ ] M3 Model download/delete manager
+- [x] M3 Model download/delete manager (compileDebugKotlin + 9 JVM tests green; not run on a device)
 - [x] M4 Audio + streaming STT (JVM-tested with fake engine; not tested on device)
 - [x] M5 Cleanup + UI + history (compiles; not run on device)
 - [ ] M6 Integration, APK, report
 - [ ] M7 (future) QNN / OpenCL backends
+
+## Models API (M3) - for other modules
+- `container.modelRepository.activeSttPath(): Flow<String?>` and `activeLlmPath(): Flow<String?>`: absolute path of the selected model file, null if none selected or file missing. Emits on select/download/delete. First finished download of a kind is auto-selected.
+- Files: `<getExternalFilesDir>/models/{stt,llm}/<file>` (+ `.part` while downloading). Catalog in `models/ModelCatalog.kt` (sizes + SHA256 verified via HF tree API on 2026-10-26; all curated repos are ungated: Qwen official, unsloth mirrors for Gemma 3 / Llama 3.2, ggerganov/whisper.cpp).
+- Settings: `SettingsRepository.hfToken` / `setHfToken` (optional HF token, sent as Bearer; OkHttp drops it on cross-host redirect to the CDN).
+- `DownloadService` (foreground, dataSync) shows progress notification; started from ModelsViewModel. Manifest has FOREGROUND_SERVICE(+_DATA_SYNC) and POST_NOTIFICATIONS (requested at first download on API 33+).
+- Qwen3 note for M5: disable thinking in prompt. Gemma 3 / Qwen3 GGUFs are text-only (no mmproj needed).
 
 ## Known issues
 - M2 code has never executed (no device, no host compiler). First on-device run may reveal runtime issues (backend variant loading, model load, chat template for a given model). Check logcat tags `ggml`, `VoiceCleanJNI`.
 - Unsupported embedded chat templates silently fall back to ChatML.
 - Not tested on a device/emulator; only `assembleDebug` verified.
 - Home screen uses FakeSttEngine/FakeLlmEngine (swap in `di/AppContainer.kt`). Fake LLM just capitalizes/echoes text. Each style tap writes a History row.
+- M3: resume/retry/checksum only unit-tested against MockWebServer, never against a multi-GB real download or on-device. Downloads do not auto-resume after process death (user taps Resume; .part is kept and shown as partial). Custom models have size-only verification (no SHA). Notification may be hidden if POST_NOTIFICATIONS is denied (service still runs).
 - Gradle wrapper download can time out on first run; re-run.
 - Debug APK is ~60MB (Compose + c++_shared); expected to grow with llama/whisper.
 - Dynamic color theme requires minSdk 31 (ok).
@@ -47,6 +55,7 @@ Phase B (parallel, disjoint dirs):
 Then Phase C integration (M6): replace fakes in AppContainer.
 
 ## Session log
+- S3 (Models agent): M3 done. models/{ModelCatalog,ResumableDownloader,DownloadManager,DownloadService,ModelRepository,CustomModelSpec}.kt, ui/ModelsScreen+ModelsViewModel, tests in app/src/test/.../models. Added mockwebserver testImplementation.
 - S1: Wrote CLAUDE.md, docs/PLAN.md, DECISIONS.md, STATE.md.
 - S2: Phase A. Installed NDK/CMake, created wrapper, scaffold (ui/nav/theme, Room, DataStore, AppContainer, engine interfaces + fakes, native stub). assembleDebug OK.
 

@@ -21,3 +21,5 @@
 | D12 | CPU backend built as runtime-dispatched variants (GGML_BACKEND_DL + GGML_CPU_ALL_VARIANTS), libs extracted (useLegacyPackaging) | Avoid SIGILL on non-i8mm SoCs while using dotprod/i8mm where present |
 | D13 | whisper.cpp compiled directly against llama.cpp's ggml (whisper's ggml copy removed) | Implements D11; verified symbol resolution |
 | D14 | GenParams extended with systemPrompt + sampler params; chat template applied natively | Needed for system+user messages |
+| D12 | Curated models use ungated mirrors (Qwen official, unsloth for Gemma 3/Llama 3.2) with hardcoded size + SHA256 (from HF LFS oid); optional user HF token in settings for gated/custom repos | Avoid login friction; integrity check |
+| D13 | Downloads: app-scoped DownloadManager (OkHttp, Range resume to .part, atomic rename) + foreground dataSync service for notification/process keep-alive; models stored in app external files dir (fallback internal) | Multi-GB files must survive screen changes/backgrounding |
