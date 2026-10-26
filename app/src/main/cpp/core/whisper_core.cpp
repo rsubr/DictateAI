@@ -3,6 +3,7 @@
 #include "ggml-backend.h"
 #include <algorithm>
 #include <exception>
+#include <cstdio>
 #include <mutex>
 
 struct VcWhisper {
@@ -18,11 +19,11 @@ void vc_init_backends(const char *dir) {
     });
 }
 
-VcWhisper *vc_whisper_load(const char *path, std::string &err) {
+VcWhisper *vc_whisper_load(const char *path, bool flash_attn, std::string &err) {
     try {
         whisper_context_params cp = whisper_context_default_params();
         cp.use_gpu = false;
-        cp.flash_attn = true;
+        cp.flash_attn = flash_attn;
         whisper_context *ctx = whisper_init_from_file_with_params(path, cp);
         if (!ctx) { err = std::string("failed to load whisper model: ") + path; return nullptr; }
         auto *w = new VcWhisper();
@@ -33,17 +34,17 @@ VcWhisper *vc_whisper_load(const char *path, std::string &err) {
     return nullptr;
 }
 
-std::string vc_whisper_transcribe(VcWhisper *w, const float *pcm, int n, int threads, int beam,
+std::string vc_whisper_transcribe(VcWhisper *w, const float *pcm, int n, const VcDecodeOpts &o,
                                   const char *initial_prompt, std::string &err) {
     if (!w) { err = "whisper not loaded"; return ""; }
     if (n < 1600) return "";  // < 100 ms
     try {
         std::lock_guard<std::mutex> lk(w->mu);
-        beam = std::min(beam, 5);
+        int beam = std::min(o.beam, 5);
         whisper_full_params p = whisper_full_default_params(beam > 1 ? WHISPER_SAMPLING_BEAM_SEARCH
                                                                       : WHISPER_SAMPLING_GREEDY);
         if (beam > 1) p.beam_search.beam_size = beam;
-        p.n_threads = std::max(1, threads);
+        p.n_threads = std::max(1, o.threads);
         p.language = "en";
         p.translate = false;
         p.detect_language = false;
@@ -51,8 +52,12 @@ std::string vc_whisper_transcribe(VcWhisper *w, const float *pcm, int n, int thr
         p.print_progress = p.print_realtime = p.print_special = p.print_timestamps = false;
         p.suppress_blank = true;
         p.no_context = true;
-        p.single_segment = false;
+        p.single_segment = o.partial;
+        p.audio_ctx = std::max(0, std::min(o.audio_ctx, whisper_n_audio_ctx(w->ctx)));
+        if (o.partial) p.temperature_inc = 0.0f;  // no temperature fallback re-decodes for provisional text
+        p.token_timestamps = false;
         p.initial_prompt = (initial_prompt && *initial_prompt) ? initial_prompt : nullptr;
+        whisper_reset_timings(w->ctx);
         if (whisper_full(w->ctx, p, pcm, n) != 0) { err = "whisper_full failed"; return ""; }
         std::string out;
         int ns = whisper_full_n_segments(w->ctx);
@@ -66,6 +71,16 @@ std::string vc_whisper_transcribe(VcWhisper *w, const float *pcm, int n, int thr
     } catch (const std::exception &e) { err = e.what(); }
     catch (...) { err = "unknown error in whisper transcribe"; }
     return "";
+}
+
+std::string vc_whisper_last_timings(VcWhisper *w) {
+    if (!w || !w->ctx) return "";
+    std::lock_guard<std::mutex> lk(w->mu);
+    whisper_timings *t = whisper_get_timings(w->ctx);
+    if (!t) return "";
+    char buf[96];
+    snprintf(buf, sizeof buf, "encode=%.0fms decode=%.0fms", t->encode_ms, t->decode_ms + t->batchd_ms + t->prompt_ms);
+    return buf;
 }
 
 void vc_whisper_free(VcWhisper *w) {

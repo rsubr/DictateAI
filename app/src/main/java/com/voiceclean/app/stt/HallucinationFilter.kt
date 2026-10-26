@@ -8,21 +8,24 @@ object HallucinationFilter {
 
     /** Whole-utterance phrases Whisper invents on silence. Only dropped when little speech was detected. */
     private val phantoms = setOf(
-        "thank you", "thank you.", "thanks.", "thanks", "thank you very much.", "thanks for watching.", "thanks for watching!",
-        "thank you for watching.", "thank you for watching!", "please subscribe.", "bye.", "bye!", "bye-bye.", "you", "you.",
-        "so", "okay.", "oh.", "uh.", "um.", "hmm.", "mm-hmm.", "the end.", "i'm sorry.", "subtitles by the amara.org community",
+        "thank you", "thanks", "thank you very much", "thank you so much", "thanks for watching", "thank you for watching",
+        "thanks for listening", "thank you for listening", "please subscribe", "like and subscribe", "bye", "bye-bye",
+        "bye bye", "you", "so", "okay", "oh", "uh", "um", "hmm", "mm-hmm", "the end", "i'm sorry", "see you next time",
+        "see you in the next video", "i'll see you in the next video", "subtitles by the amara.org community", "mm", "ah",
     )
+    private val edgePunct = charArrayOf(',', '.', '!', '?', ';', ':', '"', '\'', ' ', '-', '…')
 
     /**
      * @param speechSeconds seconds of VAD-detected speech in the audio that produced [text]; phantom phrases are only
-     * dropped when this is small (< [phantomMaxSpeechSec]).
+     * dropped when this is small (< [phantomMaxSpeechSec]) or [speechRatio] (speech share of the audio) is below 0.25.
      */
-    fun clean(text: String, speechSeconds: Float = 0f, phantomMaxSpeechSec: Float = 1.6f): String {
+    fun clean(text: String, speechSeconds: Float = 0f, phantomMaxSpeechSec: Float = 1.6f, speechRatio: Float = 0f): String {
         var t = tags.replace(text) { m -> if (knownTagWords.containsMatchIn(m.value) || m.value.startsWith("♪")) " " else m.value }
         t = ws.replace(t, " ").trim()
         if (t.isEmpty()) return ""
         t = collapseRepeats(t)
-        if (speechSeconds < phantomMaxSpeechSec && t.lowercase().trim() in phantoms) return ""
+        val lowSpeech = speechSeconds < phantomMaxSpeechSec || (speechRatio in 0.0001f..0.25f && speechSeconds < 4f)
+        if (lowSpeech && t.lowercase().trim(*edgePunct) in phantoms) return ""
         // pure punctuation
         if (t.none { it.isLetterOrDigit() }) return ""
         return t

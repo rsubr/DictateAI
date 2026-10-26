@@ -15,6 +15,8 @@ data class Settings(
     val autoCleanup: Boolean = true,
     val activeSttModel: String = "",
     val activeLlmModel: String = "",
+    /** Whisper flash attention: "auto" (benchmark once per model), "on", "off". Applies at next STT load. */
+    val whisperFlashAttn: String = "auto",
 )
 
 class SettingsRepository(private val context: Context) {
@@ -25,6 +27,7 @@ class SettingsRepository(private val context: Context) {
         val auto = booleanPreferencesKey("auto_cleanup")
         val stt = stringPreferencesKey("active_stt_model")
         val llm = stringPreferencesKey("active_llm_model")
+        val flash = stringPreferencesKey("whisper_flash_attn")
         val hfToken = stringPreferencesKey("hf_token")
     }
 
@@ -37,6 +40,7 @@ class SettingsRepository(private val context: Context) {
         Settings(
             p[K.backend] ?: d.llmBackend, p[K.threads] ?: d.threads, p[K.ctx] ?: d.contextSize,
             p[K.auto] ?: d.autoCleanup, p[K.stt] ?: d.activeSttModel, p[K.llm] ?: d.activeLlmModel,
+            p[K.flash] ?: d.whisperFlashAttn,
         )
     }
 
@@ -44,6 +48,7 @@ class SettingsRepository(private val context: Context) {
     suspend fun setThreads(v: Int) = context.dataStore.edit { it[K.threads] = v }
     suspend fun setContextSize(v: Int) = context.dataStore.edit { it[K.ctx] = v }
     suspend fun setAutoCleanup(v: Boolean) = context.dataStore.edit { it[K.auto] = v }
+    suspend fun setWhisperFlashAttn(v: String) = context.dataStore.edit { it[K.flash] = v }
     suspend fun setActiveSttModel(v: String) = context.dataStore.edit { it[K.stt] = v }
     suspend fun setActiveLlmModel(v: String) = context.dataStore.edit { it[K.llm] = v }
 }

@@ -110,4 +110,104 @@ class StreamingTranscriberTest {
         assertTrue(t.transcript.value.committed.contains("chunk"))
         advanceUntilIdle()
     }
+
+    /** Engine that records DecodeOpts and advances a fake clock by [costMs] per decode. */
+    private class TierEngine(
+        val partialText: String = "provisional words", val finalText: String = "final words",
+        val costMs: (DecodeOpts) -> Long = { 100 },
+    ) : SttEngine {
+        var now = 0L
+        val calls = mutableListOf<DecodeOpts>()
+        val sizes = mutableListOf<Int>()
+        var gate: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+        var readyChecks = 0
+        override suspend fun load(path: String) {}
+        override suspend fun awaitReady() { readyChecks++; gate?.await() }
+        override fun transcribe(pcm: FloatArray, prompt: String?) = transcribe(pcm, prompt, DecodeOpts())
+        override fun transcribe(pcm: FloatArray, prompt: String?, opts: DecodeOpts): String {
+            calls += opts; sizes += pcm.size; now += costMs(opts)
+            return if (opts.partial) partialText else finalText
+        }
+        override fun unload() {}
+    }
+
+    @Test fun twoTierProvisionalIsReplacedByFinal() = runTest {
+        val engine = TierEngine()
+        val d = StandardTestDispatcher(testScheduler)
+        val t = StreamingTranscriber(engine, EnergyVad(), dispatcher = d, clockMs = { engine.now })
+        val seen = mutableListOf<Transcript>()
+        val w = backgroundScope.launch { t.transcript.collect { seen += it } }
+        t.start(this, audio(true to 3000, false to 1500)).join()
+        w.cancel()
+        assertTrue("provisional shown: $seen", seen.any { it.partial == "provisional words" && it.committed.isEmpty() })
+        assertEquals(Transcript("final words", ""), t.transcript.value)
+        assertTrue(engine.calls.first().partial)
+        assertFalse(engine.calls.last().partial)
+        assertEquals(1, engine.calls.count { !it.partial })
+    }
+
+    @Test fun silenceOnlyAndTrailingSilenceAreGated() = runTest {
+        val engine = TierEngine()
+        val d = StandardTestDispatcher(testScheduler)
+        val t = StreamingTranscriber(engine, EnergyVad(), dispatcher = d, clockMs = { engine.now })
+        t.start(this, audio(false to 6000)).join()
+        assertTrue(engine.calls.isEmpty())
+        // 1.5 s speech then long silence: partial decodes stop with the speech, exactly one final
+        val e2 = TierEngine()
+        val t2 = StreamingTranscriber(e2, EnergyVad(), dispatcher = d, clockMs = { e2.now })
+        t2.start(this, audio(true to 1500, false to 6000)).join()
+        assertEquals(1, e2.calls.count { !it.partial })
+        assertTrue("partials=${e2.calls.count { it.partial }}", e2.calls.count { it.partial } <= 2)
+        // the final audio is trimmed (not 7.5 s of mostly silence)
+        assertTrue(e2.sizes.last() < 16000 * 3)
+    }
+
+    @Test fun cadenceAdaptsToDecodeTimeAndNeverOverlaps() = runTest {
+        val engine = TierEngine(costMs = { if (it.partial) 4000 else 500 })
+        val d = StandardTestDispatcher(testScheduler)
+        val t = StreamingTranscriber(engine, EnergyVad(), dispatcher = d, clockMs = { engine.now })
+        t.start(this, audio(true to 12_000)).join()
+        assertEquals(2.0f, t.adaptiveIntervalSec, 0.001f)  // 4 s decode * gap factor 0.5
+        val partials = engine.calls.count { it.partial }
+        assertTrue("partials=$partials", partials in 1..6)  // 12 s of audio, >= 2 s apart, never queued
+    }
+
+    @Test fun finalUsesBeamOnlyWhenFast() = runTest {
+        val d = StandardTestDispatcher(testScheduler)
+        val fast = TierEngine(costMs = { 100 })
+        StreamingTranscriber(fast, EnergyVad(), dispatcher = d, clockMs = { fast.now })
+            .also { it.start(this, audio(true to 3000, false to 1500)).join() }
+        assertEquals(3, fast.calls.last { !it.partial }.beam)
+        val slow = TierEngine(costMs = { 5000 })
+        StreamingTranscriber(slow, EnergyVad(), dispatcher = d, clockMs = { slow.now })
+            .also { it.start(this, audio(true to 3000, false to 1500)).join() }
+        assertEquals(1, slow.calls.last { !it.partial }.beam)
+    }
+
+    @Test fun audioBufferedWhileModelLoads() = runTest {
+        val engine = TierEngine()
+        engine.gate = kotlinx.coroutines.CompletableDeferred()
+        val d = StandardTestDispatcher(testScheduler)
+        val t = StreamingTranscriber(engine, EnergyVad(), dispatcher = d, clockMs = { engine.now })
+        val job = t.start(this, audio(true to 2000, false to 1500))
+        delay(3_000)
+        assertTrue(t.modelLoading.value)
+        assertTrue(engine.calls.isEmpty())
+        engine.gate!!.complete(Unit)
+        job.join()
+        assertFalse(t.modelLoading.value)
+        assertEquals("final words", t.transcript.value.committed)
+        assertEquals(1, engine.readyChecks)
+        assertTrue(engine.sizes.last() >= 16000 * 2)  // the audio spoken during loading was kept
+    }
+
+    @Test fun logsTimeToFirstText() = runTest {
+        val engine = TierEngine()
+        val logs = mutableListOf<String>()
+        val d = StandardTestDispatcher(testScheduler)
+        val t = StreamingTranscriber(engine, EnergyVad(), dispatcher = d, clockMs = { engine.now }, log = { logs += it })
+        t.start(this, audio(true to 3000, false to 1500)).join()
+        assertTrue(t.timeToFirstTextMs >= 0)
+        assertTrue(logs.any { it.startsWith("time-to-first-text") })
+    }
 }

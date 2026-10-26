@@ -6,7 +6,12 @@ import android.os.Build
 import com.voiceclean.app.NativeBridge
 import com.voiceclean.app.di.AppContainer
 import com.voiceclean.app.di.EngineState
+import com.voiceclean.app.llm.CleanupService
 import com.voiceclean.app.llm.GenParams
+import com.voiceclean.app.stt.DecodeOpts
+import com.voiceclean.app.stt.FallbackSttEngine
+import com.voiceclean.app.stt.FlashMode
+import com.voiceclean.app.stt.WhisperEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -60,9 +65,9 @@ class Diagnostics(
         append(deviceInfo()); append(engineInfo())
         if (_selfTest.value.isNotBlank()) { appendLine("--- self-test ---"); appendLine(_selfTest.value) }
         appendLine("--- app log (recent) ---")
-        appendLine(DebugLog.recent().takeLast(12000))
+        appendLine(DebugLog.recent().takeLast(30000))
         appendLine("--- native log (ggml/llama/whisper) ---")
-        appendLine(NativeBridge.nativeLogText().takeLast(12000))
+        appendLine(NativeBridge.nativeLogText().takeLast(24000))
     }
 
     fun runSelfTest() {
@@ -79,12 +84,39 @@ class Diagnostics(
                 try {
                     val t0 = System.currentTimeMillis()
                     p.ensureSttLoaded()
-                    line("STT load: ${System.currentTimeMillis() - t0} ms (${p.sttState.value.modelFile})")
-                    val pcm = FloatArray(16000)
-                    val t1 = System.currentTimeMillis()
-                    val text = container.sttEngine.transcribe(pcm, null)
-                    val ms = System.currentTimeMillis() - t1
-                    line("STT transcribe 1 s silence: $ms ms (realtime factor ${"%.2f".format(ms / 1000.0)}), text='${text}'")
+                    val fb = container.sttEngine as? FallbackSttEngine
+                    val we = fb?.whisper
+                    line("STT load (incl. warm-up): ${System.currentTimeMillis() - t0} ms (${p.sttState.value.modelFile})" +
+                        (we?.let { "; native load ${it.lastLoadMs} ms, warm-up ${it.lastWarmupMs} ms, flash_attn=${it.activeFlash}, threads=${it.threads}" } ?: ""))
+                    val pcm = WhisperEngine.syntheticSpeech(5f)
+                    val eng = container.sttEngine
+                    fun rtf(ms: Long, sec: Float) = "RTF ${"%.2f".format(ms / (sec * 1000.0))}"
+                    for (n in 1..2) {
+                        val t1 = System.currentTimeMillis()
+                        val text = eng.transcribe(pcm, null, DecodeOpts(partial = true))
+                        val ms = System.currentTimeMillis() - t1
+                        line("STT partial 5 s speech-like (reduced ctx) #$n ${if (n == 1) "(first call after load)" else "(warm)"}: $ms ms, ${rtf(ms, 5f)}, text='${text.take(60)}'")
+                    }
+                    val tf = System.currentTimeMillis()
+                    eng.transcribe(pcm, null, DecodeOpts(partial = false))
+                    val msf = System.currentTimeMillis() - tf
+                    line("STT final 5 s (full 30 s ctx, warm): $msf ms, ${rtf(msf, 5f)}")
+                    val path = container.modelRepository.activeSttPath().first()
+                    if (we != null && path != null) {
+                        line("Benchmarking flash_attn on/off (loads the model twice, ~10-60 s)...")
+                        val rows = we.benchmark(path)
+                        rows.forEach { r ->
+                            line("  flash_attn=${if (r.flash) "ON " else "OFF"}: load ${r.loadMs} ms, warm-up ${r.warmupMs} ms, " +
+                                "5 s partial ${r.partialMs} ms, 5 s final ${r.fullMs} ms")
+                        }
+                        val best = we.storedChoice(path)
+                        line("  faster: flash_attn ${if (best == true) "ON" else "OFF"}; setting is '${container.settingsRepository.settings.first().whisperFlashAttn}'" +
+                            " (auto uses the faster one)")
+                        if (best != null && best != we.activeFlash && container.settingsRepository.settings.first().whisperFlashAttn == FlashMode.AUTO) {
+                            line("  reloading speech model with flash_attn=${if (best) "ON" else "OFF"}")
+                            p.reloadStt()
+                        }
+                    }
                     line("STT: OK")
                 } catch (e: Throwable) {
                     line("STT FAILED: ${e.message ?: e.javaClass.simpleName}")
@@ -112,7 +144,7 @@ class Diagnostics(
                     val decodeMs = (total - first.coerceAtLeast(0)).coerceAtLeast(1)
                     val tps = if (pieces > 1) (pieces - 1) * 1000.0 / decodeMs else 0.0
                     line("LLM generate: first token ${first} ms, total $total ms, $pieces tokens, ~${"%.1f".format(tps)} tok/s")
-                    line("LLM output: '${out.toString().trim().take(200)}'")
+                    line("LLM output: '${CleanupService.sanitize(out.toString()).take(200)}'")
                     line(if (pieces > 0) "LLM: OK" else "LLM: produced no tokens")
                 } catch (e: Throwable) {
                     line("LLM FAILED: ${e.message ?: e.javaClass.simpleName}")

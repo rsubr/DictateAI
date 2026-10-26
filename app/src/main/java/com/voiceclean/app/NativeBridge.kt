@@ -25,8 +25,13 @@ object NativeBridge {
     /** ggml CPU feature string of the selected CPU variant (valid after [initBackends]). */
     fun systemInfo(): String = if (isLoaded) runCatching { nativeSystemInfo() }.getOrDefault("") else ""
 
-    external fun whisperLoad(path: String): Long
-    external fun whisperTranscribe(handle: Long, pcm: FloatArray, threads: Int, beam: Int, initialPrompt: String?): String
+    external fun whisperLoad(path: String, flashAttn: Boolean): Long
+    /** audioCtx: encoder frames (50 per second of audio), 0 = full 30 s window. partial = provisional decode (single segment, no temperature fallback). */
+    external fun whisperTranscribe(
+        handle: Long, pcm: FloatArray, threads: Int, beam: Int, audioCtx: Int, partial: Boolean, initialPrompt: String?,
+    ): String
+    /** whisper's own encode/decode timers of the last transcribe call. */
+    external fun whisperTimings(handle: Long): String
     external fun whisperFree(handle: Long)
 
     external fun llamaLoad(path: String, nCtx: Int, threads: Int): Long

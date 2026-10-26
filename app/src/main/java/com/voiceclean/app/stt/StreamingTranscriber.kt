@@ -3,6 +3,7 @@ package com.voiceclean.app.stt
 import com.voiceclean.app.audio.SAMPLE_RATE
 import com.voiceclean.app.audio.Vad
 import com.voiceclean.app.audio.rms
+import com.voiceclean.app.diag.DebugLog
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -13,31 +14,42 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.takeWhile
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicInteger
 
+/**
+ * [committed] = final (accurate) text of finished utterances. [partial] = everything not yet final: provisional text of
+ * finished utterances still waiting for their accurate re-decode plus the provisional text of the current utterance.
+ */
 data class Transcript(val committed: String = "", val partial: String = "") {
     val full: String get() = listOf(committed, partial).filter { it.isNotBlank() }.joinToString(" ")
 }
 
 /**
- * Sliding-window streaming on top of a non-streaming [SttEngine] (D5).
+ * Two-tier sliding-window streaming on top of a non-streaming [SttEngine] (D5, D26).
  *
- * - Audio is accumulated in an utterance window. Every [Config.decodeIntervalSec] of audio the window is decoded
- *   (never overlapping: a partial is skipped while the engine is busy) and published as `partial`.
- * - When VAD reports [Config.finalizeSilenceSec] of silence after speech (or the window reaches [Config.maxWindowSec])
- *   the window is queued for a final decode, its text is committed and a new window starts. Committed text is passed
- *   as the initial prompt (last [Config.promptChars] chars) for context.
+ * - Tier 1 (provisional): while speech is going on the current utterance window is decoded with [DecodeOpts.partial]
+ *   (reduced encoder context, greedy) and shown as `partial`. Decodes never overlap or queue: the next one starts as
+ *   soon as the previous finished and at least [adaptiveInterval] of new audio arrived (>= [Config.decodeIntervalSec],
+ *   stretched to [Config.cadenceGapFactor] x the measured decode time so a slow model is not kept 100% busy).
+ * - Tier 2 (final): when the VAD sees [Config.finalizeSilenceSec] of silence after speech (or the window reaches
+ *   [Config.maxWindowSec], or [stop]) the utterance is queued for an accurate full-context re-decode (beam search when
+ *   the measured speed allows). Its text replaces the provisional text of that utterance and becomes `committed`;
+ *   committed text (last [Config.promptChars] chars) is the initial prompt of later decodes.
+ * - Gate: windows without enough VAD speech are never decoded, and a partial is only decoded when new speech arrived
+ *   since the previous decode (silence-only audio is what makes Whisper hallucinate "you"/"Thank you").
+ * - Audio is buffered while the model is still loading ([modelLoading] is true); decoding starts when it is ready.
  * - After [Config.autoStopSilenceSec] without speech the session ends by itself ([autoStopped] becomes true).
- * - Time is measured in audio samples, so behaviour is deterministic and independent of wall-clock.
+ * - Audio time is measured in samples (deterministic); decode durations use the injected [clockMs].
  */
 class StreamingTranscriber(
     private val engine: SttEngine,
     private val vad: Vad,
     private val config: Config = Config(),
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
+    private val clockMs: () -> Long = { System.nanoTime() / 1_000_000 },
+    private val log: (String) -> Unit = { m -> try { DebugLog.i("Stream", m) } catch (_: Throwable) {} },
 ) {
     data class Config(
         val decodeIntervalSec: Float = 1.0f,
@@ -47,6 +59,14 @@ class StreamingTranscriber(
         val minSpeechSec: Float = 0.3f,
         val prerollSec: Float = 0.5f,
         val promptChars: Int = 224,
+        /** Beam size of final decodes when decoding is fast enough (see [fastRtf]); otherwise greedy. */
+        val finalBeam: Int = 3,
+        /** Real-time factor (decode ms / audio ms) below which beam search is affordable for finals. */
+        val fastRtf: Float = 0.5f,
+        /** Idle gap between partial decodes as a fraction of the last partial decode time. */
+        val cadenceGapFactor: Float = 0.5f,
+        /** Keep at most this much trailing silence in an utterance sent to the final decode. */
+        val finalTrailingSilenceSec: Float = 0.3f,
     )
 
     private val _transcript = MutableStateFlow(Transcript())
@@ -58,20 +78,49 @@ class StreamingTranscriber(
     val autoStopped: StateFlow<Boolean> = _autoStopped.asStateFlow()
     private val _error = MutableStateFlow<Throwable?>(null)
     val error: StateFlow<Throwable?> = _error.asStateFlow()
+    private val _modelLoading = MutableStateFlow(false)
+    /** True while audio is being buffered because the speech model is not ready yet. */
+    val modelLoading: StateFlow<Boolean> = _modelLoading.asStateFlow()
+    /** Milliseconds from [start] to the first non-empty text, -1 until then. */
+    @Volatile var timeToFirstTextMs: Long = -1; private set
+    /** Current adaptive gap between partial decodes in audio seconds (for tests/diagnostics). */
+    @Volatile var adaptiveIntervalSec: Float = config.decodeIntervalSec; private set
 
+    @Volatile private var partialRtf = -1f   // decode ms / audio ms of the latest partial decode
+    @Volatile private var finalRtf = -1f     // ... of the latest final decode
     @Volatile private var stopRequested = false
     private var session: Job? = null
     private var collectJob: Job? = null
+    private var startedAtMs = 0L
 
-    private class Req(val pcm: FloatArray, val speechSec: Float, val windowId: Int, val final: Boolean)
+    private class Req(
+        val pcm: FloatArray, val speechSec: Float, val utt: Int, val final: Boolean, val windowSec: Float,
+    )
+
+    /** Provisional text per utterance still waiting for its final decode; guarded by `lock`. */
+    private val lock = Any()
+    private val provisional = LinkedHashMap<Int, String>()
+    private var committed = ""
+
+    private fun publish() {
+        val t = synchronized(lock) { Transcript(committed, provisional.values.filter { it.isNotBlank() }.joinToString(" ")) }
+        _transcript.value = t
+        if (timeToFirstTextMs < 0 && t.full.isNotBlank()) {
+            timeToFirstTextMs = clockMs() - startedAtMs
+            log("time-to-first-text: ${timeToFirstTextMs} ms after start")
+        }
+    }
 
     /** Starts a session; returns immediately. [audio] is collected until it ends, [stop] is called or auto-stop fires. */
     fun start(scope: CoroutineScope, audio: Flow<FloatArray>): Job {
         check(session?.isActive != true) { "already running" }
         stopRequested = false
+        synchronized(lock) { provisional.clear(); committed = "" }
         _transcript.value = Transcript()
         _autoStopped.value = false
         _error.value = null
+        timeToFirstTextMs = -1
+        startedAtMs = clockMs()
         vad.reset()
         val j = scope.launch(dispatcher) { runSession(this, audio) }
         session = j
@@ -89,25 +138,53 @@ class StreamingTranscriber(
     private suspend fun runSession(scope: CoroutineScope, audio: Flow<FloatArray>) {
         val queue = Channel<Req>(Channel.UNLIMITED)
         val pending = AtomicInteger(0)
-        val currentWindow = AtomicInteger(0)
+        val currentUtt = AtomicInteger(0)
         val worker = scope.launch(dispatcher) {
+            var ready = false
             for (r in queue) {
                 try {
-                    val prompt = _transcript.value.committed.takeLast(config.promptChars).trim().ifEmpty { null }
-                    val raw = withContext(dispatcher) { engine.transcribe(r.pcm, prompt) }
-                    val text = HallucinationFilter.clean(raw, r.speechSec)
-                    if (r.final) {
-                        _transcript.update { t ->
-                            if (text.isEmpty()) t.copy(partial = "")
-                            else t.copy(committed = if (t.committed.isEmpty()) text else t.committed + " " + text, partial = "")
-                        }
-                    } else if (r.windowId == currentWindow.get()) {
-                        _transcript.update { it.copy(partial = text) }
+                    if (!ready) {
+                        _modelLoading.value = true
+                        try { engine.awaitReady() } finally { _modelLoading.value = false }
+                        ready = true
                     }
+                    // stale provisional request (its utterance already has/will get a final): skip
+                    if (!r.final && r.utt != currentUtt.get()) continue
+                    val prompt = synchronized(lock) { committed }.takeLast(config.promptChars).trim().ifEmpty { null }
+                    // full-context finals cost roughly 3x a reduced-context partial when no final was measured yet
+                    val estRtf = if (finalRtf >= 0f) finalRtf else if (partialRtf >= 0f) partialRtf * 3f else -1f
+                    val beam = if (!r.final) 1 else if (estRtf in 0f..config.fastRtf) config.finalBeam else 1
+                    val opts = DecodeOpts(partial = !r.final, beam = beam)
+                    val t0 = clockMs()
+                    val raw = withContext(dispatcher) { engine.transcribe(r.pcm, prompt, opts) }
+                    val ms = clockMs() - t0
+                    if (r.windowSec > 0.2f) {
+                        val rtf = ms / (r.windowSec * 1000f)
+                        if (r.final) finalRtf = rtf else partialRtf = rtf
+                    }
+                    val text = HallucinationFilter.clean(raw, r.speechSec, speechRatio = r.speechSec / r.windowSec.coerceAtLeast(0.01f))
+                    if (r.final) {
+                        log("final utt#${r.utt} window=${"%.1f".format(r.windowSec)}s speech=${"%.1f".format(r.speechSec)}s beam=$beam ms=$ms")
+                        synchronized(lock) {
+                            provisional.remove(r.utt)
+                            if (text.isNotEmpty()) committed = if (committed.isEmpty()) text else "$committed $text"
+                        }
+                    } else {
+                        adaptiveIntervalSec = maxOf(config.decodeIntervalSec, ms / 1000f * config.cadenceGapFactor)
+                        synchronized(lock) {
+                            // a final of this utterance may already be queued; provisional is only shown until it lands
+                            if (r.utt == currentUtt.get() || provisional.containsKey(r.utt)) provisional[r.utt] = text
+                        }
+                    }
+                    publish()
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (e: Throwable) {
                     _error.value = e
+                    if (r.final) synchronized(lock) {  // keep what the user already saw instead of losing it
+                        val p = provisional.remove(r.utt).orEmpty()
+                        if (p.isNotBlank()) committed = if (committed.isEmpty()) p else "$committed $p"
+                    }
                 } finally {
                     pending.decrementAndGet()
                 }
@@ -118,20 +195,25 @@ class StreamingTranscriber(
         var window = FloatArray(SAMPLE_RATE * 30)
         var len = 0
         var speechSamples = 0
+        var speechAtLastDecode = 0
         var trailingSilence = 0       // samples of silence since last speech frame (within window)
         var sinceDecode = 0
         var sinceSpeechTotal = 0      // samples since last speech anywhere (for auto-stop)
         var smooth = 0f
+        val finalTrailing = (config.finalTrailingSilenceSec * SAMPLE_RATE).toInt()
 
         fun submit(final: Boolean) {
-            val pcm = window.copyOf(len)
+            var n = len
+            if (final && trailingSilence > finalTrailing) n = (len - (trailingSilence - finalTrailing)).coerceAtLeast(1)
+            val pcm = window.copyOf(n)
             pending.incrementAndGet()
-            queue.trySend(Req(pcm, speechSamples.toFloat() / SAMPLE_RATE, currentWindow.get(), final))
+            speechAtLastDecode = speechSamples
+            queue.trySend(Req(pcm, speechSamples.toFloat() / SAMPLE_RATE, currentUtt.get(), final, n.toFloat() / SAMPLE_RATE))
         }
         fun resetWindow() {
-            len = 0; speechSamples = 0; trailingSilence = 0; sinceDecode = 0; currentWindow.incrementAndGet()
+            len = 0; speechSamples = 0; speechAtLastDecode = 0; trailingSilence = 0; sinceDecode = 0
+            currentUtt.incrementAndGet()
         }
-        val intervalSamples = (config.decodeIntervalSec * SAMPLE_RATE).toInt()
         val maxSamples = (config.maxWindowSec * SAMPLE_RATE).toInt()
         val finalizeSamples = (config.finalizeSilenceSec * SAMPLE_RATE).toInt()
         val autoStopSamples = (config.autoStopSilenceSec * SAMPLE_RATE).toInt()
@@ -157,7 +239,7 @@ class StreamingTranscriber(
                     }
 
                     if (speechSamples < minSpeechSamples) {
-                        // nothing worth decoding yet: keep only a short pre-roll
+                        // gate: nothing worth decoding yet, keep only a short pre-roll
                         if (len > prerollSamples + chunk.size) {
                             val drop = len - prerollSamples
                             window.copyInto(window, 0, drop, len)
@@ -165,12 +247,18 @@ class StreamingTranscriber(
                         }
                         sinceDecode = 0
                     } else if (trailingSilence >= finalizeSamples || len >= maxSamples) {
+                        val utt = currentUtt.get()
                         submit(true)
                         resetWindow()
-                        _transcript.update { it.copy(partial = "") }
-                    } else if (sinceDecode >= intervalSamples && pending.get() == 0) {
-                        sinceDecode = 0
-                        submit(false)
+                        // keep the finished utterance's provisional text on screen until its final replaces it
+                        synchronized(lock) { if (!provisional.containsKey(utt)) provisional[utt] = "" }
+                    } else {
+                        val intervalSamples = (adaptiveIntervalSec * SAMPLE_RATE).toInt()
+                        // never queue: only when idle; only when new speech arrived since the last decode (gate)
+                        if (sinceDecode >= intervalSamples && pending.get() == 0 && speechSamples > speechAtLastDecode) {
+                            sinceDecode = 0
+                            submit(false)
+                        }
                     }
 
                     if (sinceSpeechTotal >= autoStopSamples) {
@@ -188,6 +276,8 @@ class StreamingTranscriber(
             queue.close()
             worker.join()
             _level.value = 0f
+            synchronized(lock) { provisional.clear() }  // anything still provisional had no final: drop it
+            publish()
         }
     }
 }

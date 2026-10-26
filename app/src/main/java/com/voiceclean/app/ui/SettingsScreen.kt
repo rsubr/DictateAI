@@ -72,7 +72,15 @@ private fun DiagnosticsSection(container: AppContainer) {
             Text(if (copied) "Copied" else "Copy debug log")
         }
     }
-    Text("Self-test transcribes 1 s of silence and generates a short reply with the active models, and reports timings.",
+    val flash = container.settingsRepository.settings.collectAsStateWithLifecycle(Settings()).value.whisperFlashAttn
+    val scope = rememberCoroutineScope()
+    Text("Whisper flash attention (applies at next speech-model load)", style = MaterialTheme.typography.bodySmall)
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf("auto", "on", "off").forEach { m ->
+            FilterChip(flash == m, { scope.launch { container.settingsRepository.setWhisperFlashAttn(m) } }, { Text(m) })
+        }
+    }
+    Text("Self-test decodes a 5 s speech-like signal twice (partial) plus once (final), benchmarks flash attention on/off, generates a short reply with the LLM, and reports timings.",
         style = MaterialTheme.typography.bodySmall)
     if (report.isNotBlank()) SelectionContainer { Text(report, style = MaterialTheme.typography.bodySmall) }
 }

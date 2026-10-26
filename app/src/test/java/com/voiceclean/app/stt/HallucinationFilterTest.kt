@@ -31,4 +31,11 @@ class HallucinationFilterTest {
     @Test fun punctuationOnly() {
         assertEquals("", f.clean("...", 2f))
     }
+
+    @Test fun moreSilencePhantoms() {
+        for (x in listOf("you", "Thank you.", "Thanks for watching", "[BLANK_AUDIO]", "(silence)", ".", "Thank you so much!"))
+            assertEquals(x, "", f.clean(x, speechSeconds = 0.5f))
+        assertEquals("", f.clean("you", speechSeconds = 2.5f, speechRatio = 0.1f))
+        assertEquals("you", f.clean("you", speechSeconds = 3f, speechRatio = 0.9f))
+    }
 }

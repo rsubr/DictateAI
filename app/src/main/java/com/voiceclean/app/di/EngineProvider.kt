@@ -55,6 +55,8 @@ interface EngineProvider {
     /** Fire-and-forget background loads (errors land in [sttState]/[llmState]). */
     fun warmUpStt() {}
     fun warmUpLlm() {}
+    /** Drops the loaded speech model and loads it again (e.g. after the flash-attention setting or benchmark changed). */
+    suspend fun reloadStt() { ensureSttLoaded() }
     /** Schedule releasing the speech model's memory if it is not used again for a while. */
     fun releaseSttWhenIdle() {}
 }
@@ -100,6 +102,7 @@ class RealEngineProvider(
 
     private data class LlmKey(val path: String, val threads: Int, val ctx: Int)
     private var loadedStt: String? = null
+    private var loadedSttFlash: String = ""
     private var loadedLlm: LlmKey? = null
     @Volatile private var llmName: String = ""
     private var idleJob: Job? = null
@@ -173,9 +176,12 @@ class RealEngineProvider(
                 _sttState.value = EngineState(EngineStatus.NotConfigured, "No speech model downloaded")
                 throw IllegalStateException("No speech model downloaded. Open the Models tab.")
             }
-            val threads = settings.settings.first().threads.coerceAtLeast(1)
+            val st = settings.settings.first()
+            val threads = st.threads.coerceAtLeast(1)
             (stt as? FallbackSttEngine)?.threads = threads
-            if (loadedStt == path && isReal(stt)) return
+            (stt as? FallbackSttEngine)?.flashMode = st.whisperFlashAttn
+            if (loadedStt == path && loadedSttFlash == st.whisperFlashAttn && isReal(stt)) return
+            if (loadedStt != null) unloadStt("flash-attention setting changed")
             if (lowRam && loadedLlm != null) unloadLlm("low RAM: making room for speech model")
             val name = File(path).name
             _sttState.value = EngineState(EngineStatus.Loading, "Loading $name", name)
@@ -191,6 +197,7 @@ class RealEngineProvider(
             if (!isReal(stt)) fail(_sttState, "speech", name, lastError(stt))
             (stt as? FallbackSttEngine)?.threads = threads
             loadedStt = path
+            loadedSttFlash = st.whisperFlashAttn
             val ms = System.currentTimeMillis() - t0
             _sttState.value = EngineState(EngineStatus.Ready, null, name, ms)
             DebugLog.i("Engines", "speech model ready in $ms ms")
@@ -240,9 +247,20 @@ class RealEngineProvider(
         scope.launch { try { ensureSttLoaded(); releaseSttWhenIdle() } catch (e: CancellationException) { throw e } catch (_: Throwable) {} }
     }
 
+    override suspend fun reloadStt() {
+        loadMutex.withLock { if (loadedStt != null) unloadStt("reload requested") }
+        ensureSttLoaded()
+    }
+
+    /**
+     * Background LLM load. Only when auto-cleanup is on: with it off the language model must not load (RAM/CPU that the
+     * speech decoder needs) until a style/cleanup is actually requested ([ensureLlmLoaded] from the rewrite path).
+     */
     override fun warmUpLlm() {
         if (lowRam) return  // would evict the speech model that is about to be used
-        scope.launch { try { ensureLlmLoaded() } catch (e: CancellationException) { throw e } catch (_: Throwable) {} }
+        scope.launch {
+            if (!settings.settings.first().autoCleanup) return@launch
+            try { ensureLlmLoaded() } catch (e: CancellationException) { throw e } catch (_: Throwable) {} }
     }
 
     override fun releaseSttWhenIdle() {

@@ -23,7 +23,9 @@ class AppContainer(context: Context) {
     // Engines: real native engine wrapped so we fall back to the fake until a model has loaded OK.
     // Callers must `load(path, ...)` the active model; load failures leave the fake in place (check lastError).
     val sttEngine: SttEngine by lazy {
-        com.voiceclean.app.stt.FallbackSttEngine(com.voiceclean.app.stt.WhisperEngine(appContext), FakeSttEngine())
+        com.voiceclean.app.stt.FallbackSttEngine(com.voiceclean.app.stt.WhisperEngine(appContext), FakeSttEngine()).also {
+            it.ensureLoaded = { engineProvider.ensureSttLoaded() }
+        }
     }
     /** Picks the LLM engine for a settings backend id ("llama.cpp" | "executorch-qnn"). */
     fun createLlmEngine(backendId: String): LlmEngine = com.voiceclean.app.llm.FallbackLlmEngine(

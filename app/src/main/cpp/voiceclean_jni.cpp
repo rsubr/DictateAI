@@ -3,7 +3,9 @@
 // UTF-8, so emoji etc. are safe) and guarantees no C++ exception crosses JNI.
 #include <jni.h>
 #include <android/log.h>
+#include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <deque>
 #include <mutex>
 #include <string>
@@ -23,21 +25,49 @@ struct LlamaH {
 };
 
 // Ring buffer of recent native (ggml/llama/whisper) log lines, readable from Kotlin for diagnostics.
+// Repeated identical lines are collapsed ("x N"); lines mentioning error/warn/fail live in a second ring so they
+// survive chatter.
+struct LogLine { long seq; std::string text; int count; };
 std::mutex g_log_mu;
-std::deque<std::string> g_log;
+std::deque<LogLine> g_log, g_keep;
 std::string g_partial;  // ggml logs may arrive in fragments (CONT level)
-constexpr size_t kMaxLogLines = 600;
+long g_seq = 0;
+constexpr size_t kMaxLogLines = 1500;
+constexpr size_t kMaxKeepLines = 300;
+
+bool is_important(const std::string &s) {
+    std::string l;
+    l.reserve(s.size());
+    for (char c : s) l += (char)tolower((unsigned char)c);
+    return l.find("error") != std::string::npos || l.find("warn") != std::string::npos ||
+           l.find("fail") != std::string::npos;
+}
+
+void push_line_locked(const std::string &text) {
+    // collapse against one of the last few lines (identical lines may be interleaved with one other line)
+    size_t look = std::min<size_t>(g_log.size(), 4);
+    for (size_t i = 0; i < look; i++) {
+        LogLine &q = g_log[g_log.size() - 1 - i];
+        if (q.text == text) { q.count++; return; }
+    }
+    LogLine l{++g_seq, text, 1};
+    g_log.push_back(l);
+    if (g_log.size() > kMaxLogLines) g_log.pop_front();
+    if (is_important(text)) {
+        g_keep.push_back(l);
+        if (g_keep.size() > kMaxKeepLines) g_keep.pop_front();
+    }
+}
 
 void ring_push(const char *text) {
     std::lock_guard<std::mutex> lk(g_log_mu);
     g_partial += text;
     size_t pos;
     while ((pos = g_partial.find('\n')) != std::string::npos) {
-        g_log.push_back(g_partial.substr(0, pos));
+        push_line_locked(g_partial.substr(0, pos));
         g_partial.erase(0, pos + 1);
-        if (g_log.size() > kMaxLogLines) g_log.pop_front();
     }
-    if (g_partial.size() > 4096) { g_log.push_back(g_partial); g_partial.clear(); }
+    if (g_partial.size() > 4096) { push_line_locked(g_partial); g_partial.clear(); }
 }
 
 void android_log(ggml_log_level level, const char *text, void *) {
@@ -120,7 +150,16 @@ Java_com_voiceclean_app_NativeBridge_nativeLog(JNIEnv *env, jobject) {
     std::string out;
     {
         std::lock_guard<std::mutex> lk(g_log_mu);
-        for (auto &l : g_log) { out += l; out += '\n'; }
+        // merge the main ring with the always-kept important lines (by sequence number)
+        long first = g_log.empty() ? 0 : g_log.front().seq;
+        std::deque<const LogLine *> all;
+        for (auto &l : g_keep) if (l.seq < first) all.push_back(&l);
+        for (auto &l : g_log) all.push_back(&l);
+        for (auto *l : all) {
+            out += l->text;
+            if (l->count > 1) out += " x" + std::to_string(l->count);
+            out += '\n';
+        }
         out += g_partial;
     }
     return from_utf8(env, out);
@@ -135,17 +174,18 @@ Java_com_voiceclean_app_NativeBridge_nativeSystemInfo(JNIEnv *env, jobject) {
 // ---- Whisper ----------------------------------------------------------------
 
 JNIEXPORT jlong JNICALL
-Java_com_voiceclean_app_NativeBridge_whisperLoad(JNIEnv *env, jobject, jstring path) {
+Java_com_voiceclean_app_NativeBridge_whisperLoad(JNIEnv *env, jobject, jstring path, jboolean flashAttn) {
     std::string err;
     VcWhisper *w = nullptr;
-    try { w = vc_whisper_load(to_utf8(env, path).c_str(), err); } catch (...) { err = "native exception"; }
+    try { w = vc_whisper_load(to_utf8(env, path).c_str(), flashAttn == JNI_TRUE, err); } catch (...) { err = "native exception"; }
     if (!w) { throw_java(env, "java/lang/IllegalStateException", err); return 0; }
     return (jlong)(intptr_t)w;
 }
 
 JNIEXPORT jstring JNICALL
 Java_com_voiceclean_app_NativeBridge_whisperTranscribe(JNIEnv *env, jobject, jlong h, jfloatArray pcm,
-                                                       jint threads, jint beam, jstring prompt) {
+                                                       jint threads, jint beam, jint audioCtx, jboolean partial,
+                                                       jstring prompt) {
     if (!h) { throw_java(env, "java/lang/IllegalStateException", "whisper not loaded"); return nullptr; }
     std::string err, out;
     try {
@@ -153,11 +193,21 @@ Java_com_voiceclean_app_NativeBridge_whisperTranscribe(JNIEnv *env, jobject, jlo
         jfloat *data = env->GetFloatArrayElements(pcm, nullptr);
         if (!data) { throw_java(env, "java/lang/OutOfMemoryError", "pcm"); return nullptr; }
         std::string p = prompt ? to_utf8(env, prompt) : std::string();
-        out = vc_whisper_transcribe((VcWhisper *)(intptr_t)h, data, n, threads, beam, p.empty() ? nullptr : p.c_str(), err);
+        VcDecodeOpts o;
+        o.threads = threads; o.beam = beam; o.audio_ctx = audioCtx; o.partial = partial == JNI_TRUE;
+        out = vc_whisper_transcribe((VcWhisper *)(intptr_t)h, data, n, o, p.empty() ? nullptr : p.c_str(), err);
         env->ReleaseFloatArrayElements(pcm, data, JNI_ABORT);
     } catch (...) { err = "native exception"; }
     if (!err.empty()) { throw_java(env, "java/lang/IllegalStateException", err); return nullptr; }
     return from_utf8(env, out);
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_voiceclean_app_NativeBridge_whisperTimings(JNIEnv *env, jobject, jlong h) {
+    if (!h) return from_utf8(env, "");
+    std::string s;
+    try { s = vc_whisper_last_timings((VcWhisper *)(intptr_t)h); } catch (...) {}
+    return from_utf8(env, s);
 }
 
 JNIEXPORT void JNICALL

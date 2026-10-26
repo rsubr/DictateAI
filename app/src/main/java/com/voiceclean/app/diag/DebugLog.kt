@@ -13,8 +13,8 @@ import java.util.Locale
  * lines show what was happening). Also installs an uncaught-exception handler that records the stack trace.
  */
 object DebugLog {
-    private const val MAX_LINES = 500
-    private const val MAX_FILE_BYTES = 256 * 1024L
+    private const val MAX_LINES = 2500
+    private const val MAX_FILE_BYTES = 512 * 1024L
     private val lines = ArrayDeque<String>()
     private var file: File? = null
     private val fmt = SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)

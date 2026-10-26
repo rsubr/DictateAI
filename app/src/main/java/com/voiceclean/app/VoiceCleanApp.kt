@@ -11,5 +11,7 @@ class VoiceCleanApp : Application() {
         super.onCreate()
         com.voiceclean.app.diag.DebugLog.init(this)
         container = AppContainer(this)
+        // load the speech model (+ warm-up decode) early so the first dictation is not cold; never loads the LLM
+        container.engineProvider.warmUpStt()
     }
 }
