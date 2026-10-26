@@ -13,3 +13,8 @@
 | D9 | History of all transcriptions persisted (Room/SQLite): raw text, cleaned text, style used, timestamp | User request |
 | D10 | Package: `com.voiceclean.app` (changeable) | assumption |
 | D11 | Both ggml libs (llama + whisper) must share ONE ggml build to avoid symbol clashes | technical |
+| D12 | Streaming STT time base is audio samples (not wall clock); partial decodes are dropped while the engine is busy, finals are queued | determinism, testability |
+| D13 | PromptBuilder renders the full chat-templated prompt (per model family, detected from file name); LlmEngine.generate receives it verbatim, so native engines must not apply the template again | LlmEngine takes a single String; keeps per-family quirks (Qwen3 /no_think) in Kotlin |
+| D14 | Styles always rewrite the RAW dictation; history row stores raw + current result + style + durationMs (Room v2) | avoid stacked drift |
+| D15 | `EngineProvider` seam in di/ for engine loading and model availability; default Noop keeps fakes working | decouple parallel agents |
+

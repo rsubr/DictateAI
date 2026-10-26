@@ -22,6 +22,7 @@ android {
             cmake {
                 arguments += listOf("-DANDROID_STL=c++_shared")
                 cppFlags += "-std=c++17"
+                arguments += listOf("-DCMAKE_BUILD_TYPE=Release")
             }
         }
     }
@@ -46,7 +47,11 @@ android {
     }
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
-    packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
+    packaging {
+        resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        // ggml loads CPU-variant backend .so files from nativeLibraryDir by path -> must be extracted on install
+        jniLibs.useLegacyPackaging = true
+    }
 }
 
 ksp { arg("room.schemaLocation", "$projectDir/schemas") }
@@ -70,4 +75,7 @@ dependencies {
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.okhttp)
     implementation(libs.kotlinx.coroutines.android)
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }

@@ -24,6 +24,14 @@ fun VoiceCleanNav(container: AppContainer) {
     val nav = rememberNavController()
     val backStack by nav.currentBackStackEntryAsState()
     val current = backStack?.destination?.route
+    val openRequest = androidx.compose.runtime.remember { kotlinx.coroutines.flow.MutableStateFlow<Long?>(null) }
+    val goTo: (String) -> Unit = { route ->
+        nav.navigate(route) {
+            popUpTo(nav.graph.findStartDestination().id) { saveState = true }
+            launchSingleTop = true
+            restoreState = true
+        }
+    }
     Scaffold(
         bottomBar = {
             NavigationBar {
@@ -45,8 +53,8 @@ fun VoiceCleanNav(container: AppContainer) {
         },
     ) { pad ->
         NavHost(nav, startDestination = Dest.Home.route, modifier = Modifier.padding(pad)) {
-            composable(Dest.Home.route) { HomeScreen(container) }
-            composable(Dest.History.route) { HistoryScreen(container) }
+            composable(Dest.Home.route) { HomeScreen(container, openRequest, onGoToModels = { goTo(Dest.Models.route) }) }
+            composable(Dest.History.route) { HistoryScreen(container, onOpen = { openRequest.value = it; goTo(Dest.Home.route) }) }
             composable(Dest.Models.route) { ModelsScreen(container) }
             composable(Dest.Settings.route) { SettingsScreen(container) }
         }
