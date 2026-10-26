@@ -119,3 +119,16 @@ Then Phase C integration (M6): replace fakes in AppContainer.
 - Benchmark screen (per-model tok/s, RTF) built on Diagnostics self-test; KV/prompt cache of the system prompt; speculative decoding.
 - Foreground microphone service if background dictation is wanted (needs FOREGROUND_SERVICE_MICROPHONE).
 - Release signing, R8, instrumented tests; RealEngineProvider unit tests with a fake ModelRepository.
+
+## On-device report #1 (2026-10-26, user's Galaxy SM-S948B, SoC SM8850, Android 17/API 37, 11GB RAM)
+Source: Diagnostics "Copy debug log" after Self-test. **Native engines work on real hardware** (no crash, CPU variant picked: NEON, FMA, FP16, MATMUL_INT8, SVE(16), DOTPROD, REPACK).
+- LLM Qwen3-4B Q5_K_M: load 5.1s, first token 1.3s, ~12.3 tok/s, threads=5, ctx=4096 (KV f16 576MB, compute buf 326MB, REPACK 2.7GB).
+- STT whisper small.en: load 0.4s (mmap, lazy), **transcribe 1s of silence = 7.4s (RTF 7.4)** -> far too slow for 1s-cadence sliding window. First call, cold; flash_attn=1 on CPU; no audio_ctx reduction. Output 'you' on silence (hallucination; HallucinationFilter should catch).
+- Self-test LLM output shows raw '<think>\n\n</think>\n\nOK' (CleanupService strips it; self-test display doesn't).
+- Native log ring buffer is flooded by ~100 identical 'CPU_Mapped model buffer size = 0.01 MiB' lines.
+- NOT yet tested: real dictation, live streaming quality, cleanup quality/latency on a paragraph, UI look.
+### Planned follow-ups (priority order)
+1. STT speed: warm-up decode at load; self-test runs 2x (cold+warm) and tries flash_attn on/off; whisper `audio_ctx` shrink for short windows; two-tier streaming (fast partials w/ small model or reduced ctx, accurate final re-decode on utterance end); adapt cadence to measured decode time.
+2. Diagnostics log: collapse repeated native lines, keep larger tail, strip <think> in self-test display, include per-decode timings.
+3. LLM: benchmark screen (threads 4/5/6/8, prefill tok/s on ~200-token input), KV cache q8_0 or ctx 2048 for dictation, SM8850 Hexagon/Adreno-OpenCL llama.cpp backends (M7).
+4. UI polish after user feedback.
