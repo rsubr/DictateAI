@@ -6,6 +6,13 @@ or ExecuTorch + Qualcomm QNN. English only. Nothing leaves the phone except mode
 
 Target: Samsung Galaxy S / Snapdragon 8 and 7 series (arm64-v8a, Android 12+, API 31+).
 
+## Screenshots
+<p align="center">
+  <img src="docs/screenshot-main.png" width="250" alt="Home: dictation text area, style chips and mic button">
+  <img src="docs/screenshot-settings-1.png" width="250" alt="Settings: recommended speech models for this device">
+  <img src="docs/screenshot-settings-2.png" width="250" alt="Settings: text size, threads, context size and auto-cleanup">
+</p>
+
 ## Install (prebuilt APK)
 1. Copy the APK (or `adb install -r dist/voiceclean-debug.apk`).
 2. Allow "install unknown apps" for your file manager/browser when prompted.
