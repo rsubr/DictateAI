@@ -26,7 +26,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.input.OffsetMapping
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.TransformedText
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -54,7 +60,6 @@ fun HomeScreen(
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val req by openRequest.collectAsStateWithLifecycle()
-    var confirmClear by remember { mutableStateOf(false) }
 
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
@@ -69,6 +74,12 @@ fun HomeScreen(
     }
     LaunchedEffect(s.error) { s.error?.let { snackbar.showSnackbar(it); vm.dismissMessage() } }
     LaunchedEffect(s.notice) { s.notice?.let { snackbar.showSnackbar(it); vm.dismissMessage() } }
+    LaunchedEffect(s.clearUndoable) {
+        if (s.clearUndoable) {
+            val r = snackbar.showSnackbar("Text cleared", actionLabel = "Undo", duration = SnackbarDuration.Long)
+            if (r == SnackbarResult.ActionPerformed) vm.undoClear() else vm.dropClearUndo()
+        }
+    }
 
     val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { ok ->
         if (ok) vm.toggleRecording() else vm.onMicPermissionDenied()
@@ -76,7 +87,7 @@ fun HomeScreen(
     fun onMic() {
         val granted = androidx.core.content.ContextCompat.checkSelfPermission(ctx, Manifest.permission.RECORD_AUDIO) ==
             android.content.pm.PackageManager.PERMISSION_GRANTED
-        if (s.recording || s.starting || granted) vm.toggleRecording() else permLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        if (s.recording || granted) vm.toggleRecording() else permLauncher.launch(Manifest.permission.RECORD_AUDIO)
     }
 
     Box(Modifier.fillMaxSize()) {
@@ -86,8 +97,8 @@ fun HomeScreen(
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("VoiceClean", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
-                if (s.hasResult || s.committed.isNotEmpty()) {
-                    TextButton(onClick = { if (s.result.isNotBlank() && !s.recording) confirmClear = true else vm.newSession() }) {
+                if (s.hasText || s.recording) {
+                    TextButton(onClick = vm::newSession) {
                         Icon(Icons.Filled.Add, null); Spacer(Modifier.width(4.dp)); Text("New")
                     }
                 }
@@ -104,16 +115,22 @@ fun HomeScreen(
             }
             Card(Modifier.fillMaxWidth().weight(1f)) {
                 Box(Modifier.fillMaxSize().padding(16.dp)) {
-                    when {
-                        s.recording || s.starting -> LiveTranscript(s)
-                        s.hasResult -> ResultEditor(s, vm)
-                        else -> Text(
-                            if (s.sttAvailable) "Tap the mic and start talking.\nYour text is cleaned up when you stop."
-                            else "Download a speech model to start dictating.",
+                    TextEditor(s, vm)
+                    if (!s.hasText) {
+                        Text(
+                            when {
+                                s.recording && s.loadingModel -> "Loading speech model..."
+                                s.recording -> "Listening..."
+                                s.sttAvailable -> "Tap the mic and start talking, or type here.\nDictation is inserted at the cursor."
+                                else -> "Download a speech model to start dictating."
+                            },
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.align(Alignment.Center),
                         )
+                    } else if (s.recording && s.loadingModel) {
+                        Text("Loading speech model...", style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary, modifier = Modifier.align(Alignment.BottomStart))
                     }
                 }
             }
@@ -128,10 +145,10 @@ fun HomeScreen(
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 CHIP_STYLES.forEach { st ->
                     FilterChip(
-                        selected = s.style == st && s.hasResult,
+                        selected = s.style == st && s.hasText && (st != Style.Original || s.undo != null),
                         onClick = { vm.applyStyle(st) },
                         label = { Text(st.label) },
-                        enabled = s.hasResult && !s.recording && (st == Style.Original || s.llmAvailable),
+                        enabled = s.hasText && !s.recording && !s.cleaning && (if (st == Style.Original) s.undo != null else s.llmAvailable),
                         leadingIcon = if (s.cleaning && s.style == st) {
                             { CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp) }
                         } else null,
@@ -141,26 +158,16 @@ fun HomeScreen(
             Spacer(Modifier.height(12.dp))
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceEvenly) {
                 FilledTonalIconButton(
-                    onClick = { clipboard.setText(AnnotatedString(s.result)); scope.launch { snackbar.showSnackbar("Copied to clipboard") } },
-                    enabled = s.result.isNotBlank() && !s.recording, modifier = Modifier.size(52.dp),
+                    onClick = { clipboard.setText(AnnotatedString(vm.copyText())); scope.launch { snackbar.showSnackbar("Copied to clipboard") } },
+                    enabled = s.hasText && !s.recording, modifier = Modifier.size(52.dp),
                 ) { Icon(Icons.Filled.ContentCopy, "Copy") }
-                MicButton(recording = s.recording, busy = s.starting, level = s.level, enabled = s.sttAvailable, onClick = ::onMic)
+                MicButton(recording = s.recording, busy = s.recording && s.loadingModel, level = s.level, enabled = s.sttAvailable, onClick = ::onMic)
                 FilledTonalIconButton(
-                    onClick = vm::newSession, enabled = s.hasResult || s.recording, modifier = Modifier.size(52.dp),
+                    onClick = vm::newSession, enabled = s.hasText || s.recording, modifier = Modifier.size(52.dp),
                 ) { Icon(Icons.Filled.Clear, "Clear") }
             }
         }
         SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter).padding(bottom = 140.dp))
-    }
-
-    if (confirmClear) {
-        AlertDialog(
-            onDismissRequest = { confirmClear = false },
-            title = { Text("Start a new dictation?") },
-            text = { Text("The current text stays in History.") },
-            confirmButton = { TextButton(onClick = { confirmClear = false; vm.newSession() }) { Text("New") } },
-            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancel") } },
-        )
     }
 }
 
@@ -181,38 +188,47 @@ private fun ModelsBanner(needStt: Boolean, needLlm: Boolean, onGoToModels: () ->
     }
 }
 
-@Composable
-private fun LiveTranscript(s: HomeUiState) {
-    val scroll = rememberScrollState()
-    LaunchedEffect(s.committed, s.partial) { scroll.animateScrollTo(scroll.maxValue) }
-    val text = buildAnnotatedString {
-        append(s.committed)
-        if (s.partial.isNotEmpty()) {
-            if (s.committed.isNotEmpty()) append(" ")
-            withStyle(SpanStyle(color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f))) { append(s.partial) }
+/** Dims the provisional (not yet committed) dictated range. */
+private class ProvisionalTransformation(private val range: IntRange?, private val style: SpanStyle) : VisualTransformation {
+    override fun filter(text: AnnotatedString): TransformedText {
+        val r = range
+        val out = if (r == null || r.first < 0 || r.last >= text.length || r.isEmpty()) text
+        else buildAnnotatedString {
+            append(text)
+            addStyle(style, r.first, r.last + 1)
         }
-    }
-    Box(Modifier.fillMaxSize().verticalScroll(scroll)) {
-        if (text.isEmpty()) {
-            Text(
-                if (s.starting) "Loading speech model..." else "Listening...",
-                style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        } else Text(text, style = MaterialTheme.typography.bodyLarge)
+        return TransformedText(out, OffsetMapping.Identity)
     }
 }
 
 @Composable
-private fun ResultEditor(s: HomeUiState, vm: HomeViewModel) {
+private fun TextEditor(s: HomeUiState, vm: HomeViewModel) {
     val color = MaterialTheme.colorScheme.onSurface
-    BasicTextField(
-        value = s.result,
-        onValueChange = vm::onResultEdited,
-        enabled = !s.cleaning,
-        textStyle = MaterialTheme.typography.bodyLarge.copy(color = color),
-        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
-    )
+    val scroll = rememberScrollState()
+    var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
+    var viewport by remember { mutableIntStateOf(0) }
+    val dim = SpanStyle(color = color.copy(alpha = 0.45f), fontStyle = FontStyle.Italic)
+    val transformation = remember(s.provisional, color) { ProvisionalTransformation(s.provisional, dim) }
+    // Keep the caret / inserted text in view while dictation or a rewrite streams in.
+    LaunchedEffect(s.box.text, s.box.selection, layout, viewport, s.recording, s.cleaning) {
+        if (!s.recording && !s.cleaning) return@LaunchedEffect
+        val l = layout ?: return@LaunchedEffect
+        val caret = s.box.selection.end.coerceIn(0, s.box.text.length)
+        val bottom = l.getCursorRect(caret).bottom.toInt()
+        scroll.animateScrollTo((bottom - viewport + 24).coerceIn(0, scroll.maxValue))
+    }
+    Box(Modifier.fillMaxSize().onSizeChanged { viewport = it.height }.verticalScroll(scroll)) {
+        BasicTextField(
+            value = s.box,
+            onValueChange = vm::onFieldChanged,
+            readOnly = s.recording || s.cleaning,
+            textStyle = MaterialTheme.typography.bodyLarge.copy(color = color),
+            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+            visualTransformation = transformation,
+            onTextLayout = { layout = it },
+            modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = 200.dp),
+        )
+    }
 }
 
 @Composable
