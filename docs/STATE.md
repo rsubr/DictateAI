@@ -18,7 +18,7 @@
 - [x] M4 Audio + streaming STT (JVM-tested with fake engine; not tested on device)
 - [x] M5 Cleanup + UI + history (compiles; not run on device)
 - [x] M6 Integration, APK, report (APK: dist/voiceclean-debug.apk; nothing run on a device)
-- [ ] M7 (future) QNN / OpenCL backends
+- [ ] M7 (future) QNN / OpenCL backends. Whisper-on-NPU research done: see docs/WHISPER_QNN.md (proposal D37: ggml-hexagon route first; not implemented)
 
 ## Models API (M3) - for other modules
 - `container.modelRepository.activeSttPath(): Flow<String?>` and `activeLlmPath(): Flow<String?>`: absolute path of the selected model file, null if none selected or file missing. Emits on select/download/delete. First finished download of a kind is auto-selected.

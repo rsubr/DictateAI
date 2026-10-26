@@ -34,6 +34,11 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.voiceclean.app.data.MIN_FONT_SP
+import com.voiceclean.app.data.MAX_FONT_SP
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.voiceclean.app.di.AppContainer
@@ -90,13 +95,21 @@ fun HomeScreen(
         if (s.recording || granted) vm.toggleRecording() else permLauncher.launch(Manifest.permission.RECORD_AUDIO)
     }
 
+    val repo = container.settingsRepository
+    val fontSp by remember { repo.settings.map { it.fontSizeSp } }.collectAsStateWithLifecycle(com.voiceclean.app.data.Settings().fontSizeSp)
     Box(Modifier.fillMaxSize()) {
         Column(
             Modifier.fillMaxSize().padding(horizontal = 16.dp).padding(top = 12.dp, bottom = 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("VoiceClean", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
+                Text("DictateAI", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
+                TextButton(onClick = { scope.launch { repo.setFontSizeSp(fontSp - 2) } }, enabled = fontSp > MIN_FONT_SP) {
+                    Text("A\u2212", style = MaterialTheme.typography.titleMedium)
+                }
+                TextButton(onClick = { scope.launch { repo.setFontSizeSp(fontSp + 2) } }, enabled = fontSp < MAX_FONT_SP) {
+                    Text("A+", style = MaterialTheme.typography.titleLarge)
+                }
                 if (s.hasText || s.recording) {
                     TextButton(onClick = vm::newSession) {
                         Icon(Icons.Filled.Add, null); Spacer(Modifier.width(4.dp)); Text("New")
@@ -115,7 +128,7 @@ fun HomeScreen(
             }
             Card(Modifier.fillMaxWidth().weight(1f)) {
                 Box(Modifier.fillMaxSize().padding(16.dp)) {
-                    TextEditor(s, vm)
+                    TextEditor(s, vm, fontSp)
                     if (!s.hasText) {
                         Text(
                             when {
@@ -202,7 +215,7 @@ private class ProvisionalTransformation(private val range: IntRange?, private va
 }
 
 @Composable
-private fun TextEditor(s: HomeUiState, vm: HomeViewModel) {
+private fun TextEditor(s: HomeUiState, vm: HomeViewModel, fontSp: Int) {
     val color = MaterialTheme.colorScheme.onSurface
     val scroll = rememberScrollState()
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
@@ -222,7 +235,7 @@ private fun TextEditor(s: HomeUiState, vm: HomeViewModel) {
             value = s.box,
             onValueChange = vm::onFieldChanged,
             readOnly = s.recording || s.cleaning,
-            textStyle = MaterialTheme.typography.bodyLarge.copy(color = color),
+            textStyle = MaterialTheme.typography.bodyLarge.copy(color = color, fontSize = fontSp.sp, lineHeight = (fontSp * 1.4f).sp),
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
             visualTransformation = transformation,
             onTextLayout = { layout = it },

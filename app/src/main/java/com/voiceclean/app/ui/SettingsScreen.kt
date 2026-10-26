@@ -31,6 +31,10 @@ fun SettingsScreen(container: AppContainer) {
         Text("ExecuTorch-QNN: " + (qnnReason ?: "available"), style = MaterialTheme.typography.bodySmall)
         RecommendedSpeechModels(container)
         HorizontalDivider()
+        Text("Text size: ${s.fontSizeSp} sp")
+        Slider(s.fontSizeSp.toFloat(), { scope.launch { repo.setFontSizeSp(it.toInt()) } },
+            valueRange = com.voiceclean.app.data.MIN_FONT_SP.toFloat()..com.voiceclean.app.data.MAX_FONT_SP.toFloat(),
+            steps = com.voiceclean.app.data.MAX_FONT_SP - com.voiceclean.app.data.MIN_FONT_SP - 1)
         Text("Threads: ${s.threads}")
         Slider(s.threads.toFloat(), { scope.launch { repo.setThreads(it.toInt()) } }, valueRange = 1f..8f, steps = 6)
         Text("Context size: ${s.contextSize}")

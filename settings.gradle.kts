@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "VoiceClean"
+rootProject.name = "DictateAI"
 include(":app")

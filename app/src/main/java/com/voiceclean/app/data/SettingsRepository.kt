@@ -8,6 +8,9 @@ import kotlinx.coroutines.flow.map
 
 private val Context.dataStore by preferencesDataStore(name = "settings")
 
+const val MIN_FONT_SP = 12
+const val MAX_FONT_SP = 40
+
 data class Settings(
     val llmBackend: String = "llama.cpp", // "llama.cpp" | "executorch-qnn" (stub)
     val threads: Int = com.voiceclean.app.diag.CpuInfo.defaultThreads(),
@@ -17,6 +20,8 @@ data class Settings(
     val activeLlmModel: String = "",
     /** Whisper flash attention: "auto" (benchmark once per model), "on", "off". Applies at next STT load. */
     val whisperFlashAttn: String = "auto",
+    /** Text size (sp) of the transcript box. */
+    val fontSizeSp: Int = 18,
 )
 
 class SettingsRepository(private val context: Context) {
@@ -28,6 +33,7 @@ class SettingsRepository(private val context: Context) {
         val stt = stringPreferencesKey("active_stt_model")
         val llm = stringPreferencesKey("active_llm_model")
         val flash = stringPreferencesKey("whisper_flash_attn")
+        val fontSize = intPreferencesKey("font_size_sp")
         val hfToken = stringPreferencesKey("hf_token")
     }
 
@@ -40,10 +46,11 @@ class SettingsRepository(private val context: Context) {
         Settings(
             p[K.backend] ?: d.llmBackend, p[K.threads] ?: d.threads, p[K.ctx] ?: d.contextSize,
             p[K.auto] ?: d.autoCleanup, p[K.stt] ?: d.activeSttModel, p[K.llm] ?: d.activeLlmModel,
-            p[K.flash] ?: d.whisperFlashAttn,
+            p[K.flash] ?: d.whisperFlashAttn, (p[K.fontSize] ?: d.fontSizeSp).coerceIn(MIN_FONT_SP, MAX_FONT_SP),
         )
     }
 
+    suspend fun setFontSizeSp(v: Int) = context.dataStore.edit { it[K.fontSize] = v.coerceIn(MIN_FONT_SP, MAX_FONT_SP) }
     suspend fun setBackend(v: String) = context.dataStore.edit { it[K.backend] = v }
     suspend fun setThreads(v: Int) = context.dataStore.edit { it[K.threads] = v }
     suspend fun setContextSize(v: Int) = context.dataStore.edit { it[K.ctx] = v }

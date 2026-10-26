@@ -12,7 +12,9 @@
     <application
         android:name=".VoiceCleanApp"
         android:allowBackup="true"
-        android:label="VoiceClean"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="DictateAI"
         android:supportsRtl="true"
         android:theme="@style/Theme.VoiceClean">
         <!-- Vendor FastRPC library used by the Qualcomm Hexagon (QNN HTP) backend; required to dlopen it on Android 12+. -->

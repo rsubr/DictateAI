@@ -61,7 +61,7 @@ class Diagnostics(
 
     /** Everything the user should paste back when reporting a problem. */
     fun fullReport(): String = buildString {
-        appendLine("=== VoiceClean debug report ===")
+        appendLine("=== DictateAI debug report ===")
         append(deviceInfo()); append(engineInfo())
         if (_selfTest.value.isNotBlank()) { appendLine("--- self-test ---"); appendLine(_selfTest.value) }
         appendLine("--- app log (recent) ---")
