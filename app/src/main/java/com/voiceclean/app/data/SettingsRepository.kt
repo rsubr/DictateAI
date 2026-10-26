@@ -25,7 +25,12 @@ class SettingsRepository(private val context: Context) {
         val auto = booleanPreferencesKey("auto_cleanup")
         val stt = stringPreferencesKey("active_stt_model")
         val llm = stringPreferencesKey("active_llm_model")
+        val hfToken = stringPreferencesKey("hf_token")
     }
+
+    /** Optional Hugging Face access token (for gated repos / rate limits). */
+    val hfToken: Flow<String> = context.dataStore.data.map { it[K.hfToken] ?: "" }
+    suspend fun setHfToken(v: String) = context.dataStore.edit { it[K.hfToken] = v.trim() }
 
     val settings: Flow<Settings> = context.dataStore.data.map { p ->
         val d = Settings()

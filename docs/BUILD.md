@@ -32,3 +32,8 @@ Notes:
 - Native code: `app/src/main/cpp/CMakeLists.txt` (currently a stub `libvoiceclean_jni.so`; STL is `c++_shared`).
 - Room schemas export to `app/schemas/`.
 - Disk is tight (~4GB free after first build; ~/.gradle is ~1.5GB). Clean with `./gradlew clean` or `rm -rf app/.cxx app/build` if needed.
+
+## Native (M2)
+- Always build with `flock /tmp/voiceclean-gradle.lock ./gradlew assembleDebug` when other agents are active. Cold native build ~2.5 min (7 CPU variants of ggml + llama + whisper); .cxx lives in `app/.cxx` (`rm -rf app/.cxx` to reclaim disk).
+- Third party pinned in `app/src/main/cpp/third_party` (llama.cpp b11899, whisper.cpp v1.9.5; vendored, pruned). To upgrade: replace dirs, re-delete whisper's `ggml/`, keep the `src/aneforge` file in the CMake.
+- Native libs in APK: libvoiceclean_jni, libllama, libggml, libggml-base, libggml-cpu-android_armv*.so, libc++_shared.

@@ -13,7 +13,7 @@
 - [x] Plan, decisions, handoff docs written
 - [x] M0 Toolchain (NDK 27.2.12479018, CMake 3.22.1, Gradle 8.10.2 wrapper, AGP 8.7.3, Kotlin 2.0.21)
 - [x] M1 Scaffold (assembleDebug verified; see docs/BUILD.md)
-- [ ] M2 Native (llama.cpp + whisper.cpp JNI)
+- [x] M2 Native (llama.cpp + whisper.cpp JNI) — compiled/linked for arm64-v8a; NOT run on a device or host (see Known issues)
 - [ ] M3 Model download/delete manager
 - [x] M4 Audio + streaming STT (JVM-tested with fake engine; not tested on device)
 - [x] M5 Cleanup + UI + history (compiles; not run on device)
@@ -21,11 +21,23 @@
 - [ ] M7 (future) QNN / OpenCL backends
 
 ## Known issues
+- M2 code has never executed (no device, no host compiler). First on-device run may reveal runtime issues (backend variant loading, model load, chat template for a given model). Check logcat tags `ggml`, `VoiceCleanJNI`.
+- Unsupported embedded chat templates silently fall back to ChatML.
 - Not tested on a device/emulator; only `assembleDebug` verified.
 - Home screen uses FakeSttEngine/FakeLlmEngine (swap in `di/AppContainer.kt`). Fake LLM just capitalizes/echoes text. Each style tap writes a History row.
 - Gradle wrapper download can time out on first run; re-run.
 - Debug APK is ~60MB (Compose + c++_shared); expected to grow with llama/whisper.
 - Dynamic color theme requires minSdk 31 (ok).
+
+## M2 Native notes (S3)
+- Pinned: llama.cpp **b11899** (c6fb3b5), whisper.cpp **v1.9.5** (d1be6fd). Vendored (no .git, pruned) in `app/src/main/cpp/third_party/`. whisper.cpp's own ggml dir deleted; `whisper` target is compiled from `src/whisper.cpp` (+aneforge stub, env-gated) against llama.cpp's ggml (D11). Compiles and links cleanly against the newer ggml; all `ggml_*` undefined symbols in libvoiceclean_jni/libllama resolve to libggml/libggml-base.
+- Build: shared libs, `GGML_BACKEND_DL=ON` + `GGML_CPU_ALL_VARIANTS=ON` (Android variants armv8.0_1, 8.2_1 dotprod, 8.2_2 +fp16, 8.6_1 +i8mm, 9.0_1, 9.2_1, 9.2_2) -> ggml picks the best CPU variant at runtime (no SIGILL on 7-series). `GGML_NATIVE=OFF`, OpenMP off, KleidiAI off, OpenCL/Vulkan off (future: Adreno OpenCL). Release (-O3) forced in CMake even for debug APK.
+- Packaging: `jniLibs.useLegacyPackaging = true` (app/build.gradle.kts) because ggml dlopens `libggml-cpu-*.so` from `applicationInfo.nativeLibraryDir`. Kotlin engines call `NativeBridge.initBackends(nativeLibraryDir)` before loading models. APK now ~65MB.
+- Layout: `cpp/core/` JNI-free (`whisper_core`, `llama_core`), `cpp/voiceclean_jni.cpp` JNI glue (real UTF-8<->UTF-16 conversion, no exceptions cross JNI, mutex per context, cancel flag). `NativeBridge` exposes raw externals + `TokenCallback`.
+- Kotlin: `stt/WhisperEngine` (+`FallbackSttEngine`), `llm/LlamaCppEngine` (callbackFlow, cancel stops native), `llm/ExecuTorchQnnEngine` (throws UnsupportedOperationException) + `FallbackLlmEngine` (both in llm/ExecuTorchQnnEngine.kt).
+- **Interface change:** `GenParams` gained `systemPrompt: String? = null, topP, topK, minP, repeatPenalty` (all defaulted; source compatible). `generate(prompt, params)`: prompt = user message, `systemPrompt` = system message, wrapped with the model's embedded chat template (falls back to ChatML if unsupported). For Qwen3 add `/no_think` in the system prompt (PromptBuilder).
+- `AppContainer`: `sttEngine` = FallbackSttEngine(WhisperEngine, Fake); `createLlmEngine(backendId)` ("llama.cpp" | "executorch-qnn") wraps real engine in FallbackLlmEngine(…, Fake); `llmEngine` = createLlmEngine("llama.cpp"). **Callers must `load(path, cfg)` the active model** (until a load succeeds the Fake is used; `lastError` has the cause). WhisperEngine has mutable `threads`/`beam` (1=greedy, max 5).
+- `tools/hosttest/` has a host test harness (CMake + main.cpp) but it is UNBUILT: this box has no host C/C++ compiler/libc headers or qemu, so no model inference was run anywhere.
 
 ## Next steps
 Phase B (parallel, disjoint dirs):

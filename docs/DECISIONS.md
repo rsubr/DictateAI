@@ -18,3 +18,6 @@
 | D14 | Styles always rewrite the RAW dictation; history row stores raw + current result + style + durationMs (Room v2) | avoid stacked drift |
 | D15 | `EngineProvider` seam in di/ for engine loading and model availability; default Noop keeps fakes working | decouple parallel agents |
 
+| D12 | CPU backend built as runtime-dispatched variants (GGML_BACKEND_DL + GGML_CPU_ALL_VARIANTS), libs extracted (useLegacyPackaging) | Avoid SIGILL on non-i8mm SoCs while using dotprod/i8mm where present |
+| D13 | whisper.cpp compiled directly against llama.cpp's ggml (whisper's ggml copy removed) | Implements D11; verified symbol resolution |
+| D14 | GenParams extended with systemPrompt + sampler params; chat template applied natively | Needed for system+user messages |
