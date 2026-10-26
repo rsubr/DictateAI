@@ -33,8 +33,12 @@ class AppContainer(context: Context) {
         }, FakeLlmEngine(),
     )
     val llmEngine: LlmEngine by lazy { createLlmEngine("llama.cpp") }
-    /** M4/M5 seam: Native/Models agents replace this with a provider that loads real engines for the active models. */
-    var engineProvider: EngineProvider = NoopEngineProvider
+    private val appScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
+    /** Loads the real engines lazily on the active models (see [RealEngineProvider]). */
+    val engineProvider: EngineProvider by lazy {
+        RealEngineProvider(appContext, modelRepository, settingsRepository, sttEngine, llmEngine, appScope)
+    }
+    val diagnostics by lazy { com.voiceclean.app.diag.Diagnostics(appContext, this, appScope) }
 
     // --- Models (M3) ---
     val downloadManager by lazy {

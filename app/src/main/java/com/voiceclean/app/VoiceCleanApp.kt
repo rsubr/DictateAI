@@ -9,6 +9,7 @@ class VoiceCleanApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        com.voiceclean.app.diag.DebugLog.init(this)
         container = AppContainer(this)
     }
 }

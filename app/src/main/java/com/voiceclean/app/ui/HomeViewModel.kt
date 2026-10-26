@@ -10,6 +10,7 @@ import com.voiceclean.app.audio.EnergyVad
 import com.voiceclean.app.audio.MicPermissionException
 import com.voiceclean.app.data.Settings
 import com.voiceclean.app.di.AppContainer
+import com.voiceclean.app.di.EngineStatus
 import com.voiceclean.app.llm.CleanupService
 import com.voiceclean.app.llm.Style
 import com.voiceclean.app.stt.StreamingTranscriber
@@ -38,6 +39,8 @@ data class HomeUiState(
     val cleaning: Boolean = false,
     val sttAvailable: Boolean = true,
     val llmAvailable: Boolean = true,
+    /** Human-readable engine load progress/error ("Loading ...", "Could not load ..."), null when fine. */
+    val engineMsg: String? = null,
     val error: String? = null,
     val notice: String? = null,
 ) {
@@ -67,6 +70,20 @@ class HomeViewModel(
     private var durationMs = 0L
 
     init {
+        container.engineProvider.warmUpStt()
+        viewModelScope.launch {
+            combine(container.engineProvider.sttState, container.engineProvider.llmState) { a, b -> a to b }
+                .collect { (a, b) ->
+                    val msg = when {
+                        a.status == EngineStatus.Loading -> "Loading speech model..."
+                        b.status == EngineStatus.Loading -> "Loading language model..."
+                        a.status == EngineStatus.Error -> a.message
+                        b.status == EngineStatus.Error -> b.message
+                        else -> null
+                    }
+                    _state.update { it.copy(engineMsg = msg) }
+                }
+        }
         viewModelScope.launch {
             combine(container.engineProvider.sttAvailable, container.engineProvider.llmAvailable) { a, b -> a to b }
                 .collect { (s, l) -> _state.update { it.copy(sttAvailable = s, llmAvailable = l) } }
@@ -99,10 +116,11 @@ class HomeViewModel(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
-                _state.update { it.copy(starting = false, error = "Could not load the speech model: ${e.message}") }
+                _state.update { it.copy(starting = false, error = e.message ?: "Could not load the speech model") }
                 return@launch
             }
             if (!_state.value.starting) return@launch // user cancelled while loading
+            container.engineProvider.warmUpLlm()  // load the LLM in the background while the user speaks
             val t = StreamingTranscriber(container.sttEngine, EnergyVad())
             transcriber = t
             startedAt = System.currentTimeMillis()
@@ -136,6 +154,7 @@ class HomeViewModel(
         durationMs = System.currentTimeMillis() - startedAt
         viewModelScope.launch {
             val text = t.stop().trim()
+            container.engineProvider.releaseSttWhenIdle()
             observeJob?.cancel()
             _state.update { it.copy(committed = "", partial = "") }
             if (text.isBlank()) {
@@ -180,9 +199,15 @@ class HomeViewModel(
                 _state.update { if (it.cleaning && it.raw == st.raw && cleanupJob?.isActive != true) it.copy(cleaning = false) else it }
                 throw e
             } catch (e: Throwable) {
-                _state.update { it.copy(cleaning = false, result = prevResult, style = prevStyle, error = "Rewrite failed: ${e.message}") }
+                _state.update { it.copy(cleaning = false, result = prevResult, style = prevStyle, error = e.message ?: "Rewrite failed") }
             }
         }
+    }
+
+    /** App went to the background: Android blocks background mic capture, so end the session cleanly. */
+    fun onAppBackgrounded() {
+        if (_state.value.recording) stopRecording()
+        else if (_state.value.starting) _state.update { it.copy(starting = false) }
     }
 
     fun cancelCleanup() {

@@ -14,7 +14,7 @@ enum class ModelFamily {
     PLAIN,
     /** ChatML (Qwen2.5, Phi-4 style etc.). */
     CHATML,
-    /** Qwen3: ChatML + `/no_think` and an empty think block. */
+    /** Qwen3: ChatML + `/no_think`. */
     QWEN3,
     GEMMA,
     LLAMA3;
@@ -37,9 +37,10 @@ enum class ModelFamily {
 data class Prompt(val system: String, val user: String)
 
 /**
- * Builds the instruction prompts. [render] returns a fully templated prompt string (the engine receives it as-is,
- * so native engines must not apply a chat template again; the tokenizer should still add BOS only where the
- * template does not: see docs/DECISIONS.md D13).
+ * Builds the instruction prompts. The chat template is NOT applied here: the native engine wraps
+ * [GenParams.systemPrompt] (system) + `prompt` (user) with the GGUF's embedded chat template exactly once
+ * (D21; Gemma has no system role and the template folds it into the user turn). The only family-specific quirk
+ * handled in Kotlin is Qwen3's `/no_think` soft switch, appended to the user message.
  */
 class PromptBuilder {
 
@@ -74,22 +75,16 @@ class PromptBuilder {
 
     fun build(style: Style, raw: String): Prompt = Prompt(systemPrompt(style), userMessage(raw))
 
-    fun render(style: Style, raw: String, family: ModelFamily): String = render(build(style, raw), family)
-
-    fun render(p: Prompt, family: ModelFamily): String = when (family) {
-        ModelFamily.PLAIN -> p.system + "\n\n" + p.user + "\n"
-        ModelFamily.CHATML ->
-            "<|im_start|>system\n${p.system}<|im_end|>\n<|im_start|>user\n${p.user}<|im_end|>\n<|im_start|>assistant\n"
-        ModelFamily.QWEN3 ->
-            "<|im_start|>system\n${p.system}<|im_end|>\n<|im_start|>user\n${p.user} /no_think<|im_end|>\n" +
-                "<|im_start|>assistant\n<think>\n\n</think>\n\n"
-        ModelFamily.GEMMA ->
-            // Gemma has no system role: fold it into the user turn.
-            "<start_of_turn>user\n${p.system}\n\n${p.user}<end_of_turn>\n<start_of_turn>model\n"
-        ModelFamily.LLAMA3 ->
-            "<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n${p.system}<|eot_id|>" +
-                "<|start_header_id|>user<|end_header_id|>\n\n${p.user}<|eot_id|>" +
-                "<|start_header_id|>assistant<|end_header_id|>\n\n"
+    /**
+     * Returns (user message, params carrying the system prompt) for `LlmEngine.generate(prompt, params)`.
+     * Qwen3 (hybrid thinking models) gets `/no_think`; Qwen3 "Instruct-2507" variants never think, so they do not.
+     */
+    fun request(style: Style, raw: String, family: ModelFamily, modelName: String = ""): Pair<String, GenParams> {
+        val p = build(style, raw)
+        val noThink = family == ModelFamily.QWEN3 && !modelName.contains("instruct", ignoreCase = true) &&
+            !modelName.contains("2507")
+        val user = if (noThink) p.user + " /no_think" else p.user
+        return user to params(style, raw).copy(systemPrompt = p.system)
     }
 
     /** Low-temperature params; token budget scales with input length. */

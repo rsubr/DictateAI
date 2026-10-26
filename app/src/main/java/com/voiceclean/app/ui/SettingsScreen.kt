@@ -1,6 +1,12 @@
 package com.voiceclean.app.ui
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import com.voiceclean.app.di.EngineState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -17,7 +23,7 @@ fun SettingsScreen(container: AppContainer) {
     val repo = container.settingsRepository
     val scope = rememberCoroutineScope()
     val s by repo.settings.collectAsStateWithLifecycle(Settings())
-    Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Settings", style = MaterialTheme.typography.headlineMedium)
         Text("LLM backend")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -37,5 +43,36 @@ fun SettingsScreen(container: AppContainer) {
             Switch(s.autoCleanup, { scope.launch { repo.setAutoCleanup(it) } })
         }
         Text("Native: ${NativeBridge.version()}", style = MaterialTheme.typography.bodySmall)
+        Text("Threads and context size apply the next time the language model loads (reloaded automatically).",
+            style = MaterialTheme.typography.bodySmall)
+        HorizontalDivider()
+        DiagnosticsSection(container)
     }
+}
+
+@Composable
+private fun DiagnosticsSection(container: AppContainer) {
+    val diag = container.diagnostics
+    val provider = container.engineProvider
+    val clipboard = LocalClipboardManager.current
+    val stt by provider.sttState.collectAsStateWithLifecycle()
+    val llm by provider.llmState.collectAsStateWithLifecycle()
+    val report by diag.selfTestReport.collectAsStateWithLifecycle()
+    val running by diag.selfTestRunning.collectAsStateWithLifecycle()
+    var copied by remember { mutableStateOf(false) }
+    var info by remember { mutableStateOf("") }
+    // Refresh device/engine info when engine states change (also reads native CPU variant info).
+    LaunchedEffect(stt, llm, running) { info = diag.deviceInfo() + diag.engineInfo() }
+
+    Text("Diagnostics", style = MaterialTheme.typography.titleLarge)
+    SelectionContainer { Text(info, style = MaterialTheme.typography.bodySmall) }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Button(onClick = { diag.runSelfTest() }, enabled = !running) { Text(if (running) "Running..." else "Self-test") }
+        OutlinedButton(onClick = { clipboard.setText(AnnotatedString(diag.fullReport())); copied = true }) {
+            Text(if (copied) "Copied" else "Copy debug log")
+        }
+    }
+    Text("Self-test transcribes 1 s of silence and generates a short reply with the active models, and reports timings.",
+        style = MaterialTheme.typography.bodySmall)
+    if (report.isNotBlank()) SelectionContainer { Text(report, style = MaterialTheme.typography.bodySmall) }
 }

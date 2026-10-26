@@ -26,17 +26,21 @@ class PromptBuilderTest {
         assertEquals("<text>\nhello\n</text>", pb.userMessage("  hello "))
     }
 
-    @Test fun qwen3GetsNoThink() {
-        val r = pb.render(Style.Clean, "hi", ModelFamily.QWEN3)
-        assertTrue(r.contains("/no_think"))
-        assertTrue(r.endsWith("<think>\n\n</think>\n\n"))
-        assertFalse(pb.render(Style.Clean, "hi", ModelFamily.CHATML).contains("no_think"))
+    @Test fun qwen3GetsNoThinkInUserMessage() {
+        val (u, p) = pb.request(Style.Clean, "hi", ModelFamily.QWEN3, "Qwen3-4B-Q5_K_M.gguf")
+        assertTrue(u.endsWith("/no_think"))
+        assertTrue(p.systemPrompt!!.contains("Output ONLY"))
+        val (u2, _) = pb.request(Style.Clean, "hi", ModelFamily.QWEN3, "Qwen3-4B-Instruct-2507-Q5_K_M.gguf")
+        assertFalse(u2.contains("no_think"))
     }
 
-    @Test fun familyTemplates() {
-        assertTrue(pb.render(Style.Clean, "hi", ModelFamily.GEMMA).endsWith("<start_of_turn>model\n"))
-        assertTrue(pb.render(Style.Clean, "hi", ModelFamily.LLAMA3).endsWith("<|end_header_id|>\n\n"))
-        assertTrue(pb.render(Style.Clean, "hi", ModelFamily.CHATML).endsWith("<|im_start|>assistant\n"))
+    @Test fun noChatMarkupIsEmittedByKotlin() {
+        for (f in ModelFamily.entries) {
+            val (u, p) = pb.request(Style.Clean, "hi", f, "x")
+            assertFalse(u.contains("<|im_start|>") || u.contains("<start_of_turn>") || u.contains("<|start_header_id|>"))
+            assertFalse(p.systemPrompt!!.contains("<|"))
+            if (f != ModelFamily.QWEN3) assertFalse(u.contains("no_think"))
+        }
     }
 
     @Test fun detectFamily() {

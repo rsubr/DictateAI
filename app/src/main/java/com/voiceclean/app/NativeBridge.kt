@@ -17,6 +17,14 @@ object NativeBridge {
     /** Loads ggml backends (runtime-dispatched CPU variants) from [dir]; call once with applicationInfo.nativeLibraryDir. */
     private external fun nativeInitBackends(dir: String)
 
+    private external fun nativeLog(): String
+    private external fun nativeSystemInfo(): String
+
+    /** Recent ggml/llama/whisper log lines (ring buffer, newest last). */
+    fun nativeLogText(): String = if (isLoaded) runCatching { nativeLog() }.getOrDefault("") else ""
+    /** ggml CPU feature string of the selected CPU variant (valid after [initBackends]). */
+    fun systemInfo(): String = if (isLoaded) runCatching { nativeSystemInfo() }.getOrDefault("") else ""
+
     external fun whisperLoad(path: String): Long
     external fun whisperTranscribe(handle: Long, pcm: FloatArray, threads: Int, beam: Int, initialPrompt: String?): String
     external fun whisperFree(handle: Long)

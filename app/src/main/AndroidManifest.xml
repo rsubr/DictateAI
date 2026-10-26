@@ -14,7 +14,6 @@
         android:allowBackup="true"
         android:label="VoiceClean"
         android:supportsRtl="true"
-        android:largeHeap="true"
         android:theme="@style/Theme.VoiceClean">
         <activity
             android:name=".MainActivity"

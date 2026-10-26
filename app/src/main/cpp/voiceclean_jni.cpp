@@ -4,6 +4,8 @@
 #include <jni.h>
 #include <android/log.h>
 #include <atomic>
+#include <deque>
+#include <mutex>
 #include <string>
 #include <vector>
 #include "llama.h"
@@ -20,7 +22,27 @@ struct LlamaH {
     std::atomic<bool> cancel{false};
 };
 
+// Ring buffer of recent native (ggml/llama/whisper) log lines, readable from Kotlin for diagnostics.
+std::mutex g_log_mu;
+std::deque<std::string> g_log;
+std::string g_partial;  // ggml logs may arrive in fragments (CONT level)
+constexpr size_t kMaxLogLines = 600;
+
+void ring_push(const char *text) {
+    std::lock_guard<std::mutex> lk(g_log_mu);
+    g_partial += text;
+    size_t pos;
+    while ((pos = g_partial.find('\n')) != std::string::npos) {
+        g_log.push_back(g_partial.substr(0, pos));
+        g_partial.erase(0, pos + 1);
+        if (g_log.size() > kMaxLogLines) g_log.pop_front();
+    }
+    if (g_partial.size() > 4096) { g_log.push_back(g_partial); g_partial.clear(); }
+}
+
 void android_log(ggml_log_level level, const char *text, void *) {
+    if (!text) return;
+    if (level != GGML_LOG_LEVEL_DEBUG) ring_push(text);
     int prio = level == GGML_LOG_LEVEL_ERROR ? ANDROID_LOG_ERROR
              : level == GGML_LOG_LEVEL_WARN ? ANDROID_LOG_WARN
              : level == GGML_LOG_LEVEL_DEBUG ? ANDROID_LOG_DEBUG : ANDROID_LOG_INFO;
@@ -91,6 +113,23 @@ Java_com_voiceclean_app_NativeBridge_nativeInitBackends(JNIEnv *env, jobject, js
         whisper_log_set(android_log, nullptr);
         vc_init_backends(to_utf8(env, dir).c_str());
     } catch (...) { throw_java(env, "java/lang/RuntimeException", "backend init failed"); }
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_voiceclean_app_NativeBridge_nativeLog(JNIEnv *env, jobject) {
+    std::string out;
+    {
+        std::lock_guard<std::mutex> lk(g_log_mu);
+        for (auto &l : g_log) { out += l; out += '\n'; }
+        out += g_partial;
+    }
+    return from_utf8(env, out);
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_voiceclean_app_NativeBridge_nativeSystemInfo(JNIEnv *env, jobject) {
+    const char *s = llama_print_system_info();
+    return from_utf8(env, s ? s : "");
 }
 
 // ---- Whisper ----------------------------------------------------------------

@@ -13,12 +13,17 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.channels.Channel
 import java.io.File
+import java.util.concurrent.locks.ReentrantReadWriteLock
+import kotlin.concurrent.read
+import kotlin.concurrent.write
 
 /** llama.cpp-backed [LlmEngine]. Streams UTF-8-safe chunks; cancelling the collector stops native generation. */
 class LlamaCppEngine(context: Context) : LlmEngine {
     override val id = "llama.cpp"
     private val nativeDir = context.applicationInfo.nativeLibraryDir
     @Volatile private var handle = 0L
+    // generate() holds the read lock for the whole native call; unload() cancels, then waits for the write lock.
+    private val lock = ReentrantReadWriteLock()
     val isLoaded: Boolean get() = handle != 0L
 
     override suspend fun load(path: String, cfg: LlmConfig) = withContext(Dispatchers.IO) {
@@ -26,32 +31,43 @@ class LlamaCppEngine(context: Context) : LlmEngine {
         require(File(path).isFile) { "LLM model not found: $path" }
         unload()
         NativeBridge.initBackends(nativeDir)
-        handle = NativeBridge.llamaLoad(path, cfg.contextSize, cfg.threads)
+        val h = NativeBridge.llamaLoad(path, cfg.contextSize, cfg.threads)
+        lock.write { handle = h }
     }
 
     override fun generate(prompt: String, params: GenParams): Flow<String> = callbackFlow {
         val h = handle
         check(h != 0L) { "LLM model not loaded" }
+        val finished = java.util.concurrent.atomic.AtomicBoolean(false)
         val job = launch(Dispatchers.Default) {
             try {
-                NativeBridge.llamaGenerate(
-                    h, params.systemPrompt ?: "", prompt, params.maxTokens, params.temperature,
-                    params.topP, params.topK, params.minP, params.repeatPenalty,
-                ) { piece -> isActive && trySendBlocking(piece).isSuccess }
+                lock.read {
+                    check(handle == h) { "LLM model was unloaded" }
+                    NativeBridge.llamaGenerate(
+                        h, params.systemPrompt ?: "", prompt, params.maxTokens, params.temperature,
+                        params.topP, params.topK, params.minP, params.repeatPenalty,
+                    ) { piece -> isActive && trySendBlocking(piece).isSuccess }
+                }
+                finished.set(true)
                 close()
             } catch (e: Throwable) {
+                finished.set(true)
                 close(e)
             }
         }
         awaitClose {
-            // Collector gone (cancelled/finished): stop native decoding promptly.
-            if (job.isActive) NativeBridge.llamaCancel(h)
+            // Collector gone before the native call ended: stop native decoding promptly.
+            if (!finished.get() && job.isActive) NativeBridge.llamaCancel(h)
         }
     }.buffer(Channel.UNLIMITED)
 
-    @Synchronized override fun unload() {
+    override fun unload() {
         val h = handle
-        handle = 0L
-        if (h != 0L) { NativeBridge.llamaCancel(h); NativeBridge.llamaFree(h) }
+        if (h != 0L) NativeBridge.llamaCancel(h)  // makes a running generate return quickly
+        lock.write {
+            val cur = handle
+            handle = 0L
+            if (cur != 0L) NativeBridge.llamaFree(cur)
+        }
     }
 }

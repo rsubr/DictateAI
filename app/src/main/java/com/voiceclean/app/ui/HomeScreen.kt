@@ -56,6 +56,14 @@ fun HomeScreen(
     val req by openRequest.collectAsStateWithLifecycle()
     var confirmClear by remember { mutableStateOf(false) }
 
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val obs = androidx.lifecycle.LifecycleEventObserver { _, ev ->
+            if (ev == androidx.lifecycle.Lifecycle.Event.ON_STOP) vm.onAppBackgrounded()
+        }
+        lifecycleOwner.lifecycle.addObserver(obs)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(obs) }
+    }
     LaunchedEffect(req) {
         req?.let { vm.open(it); openRequest.value = null }
     }
@@ -89,6 +97,11 @@ fun HomeScreen(
                 Spacer(Modifier.height(8.dp))
             }
 
+            s.engineMsg?.let { m ->
+                Text(m, style = MaterialTheme.typography.bodySmall,
+                    color = if (m.startsWith("Loading")) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(bottom = 6.dp))
+            }
             Card(Modifier.fillMaxWidth().weight(1f)) {
                 Box(Modifier.fillMaxSize().padding(16.dp)) {
                     when {

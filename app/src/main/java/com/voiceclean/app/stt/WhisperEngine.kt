@@ -5,6 +5,9 @@ import com.voiceclean.app.NativeBridge
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.locks.ReentrantReadWriteLock
+import kotlin.concurrent.read
+import kotlin.concurrent.write
 
 /**
  * whisper.cpp-backed [SttEngine] (English, no translation, no timestamps).
@@ -17,6 +20,8 @@ class WhisperEngine(
 ) : SttEngine {
     private val nativeDir = context.applicationInfo.nativeLibraryDir
     @Volatile private var handle = 0L
+    // transcribe() holds the read lock so unload() cannot free the native context under a running decode.
+    private val lock = ReentrantReadWriteLock()
     val isLoaded: Boolean get() = handle != 0L
 
     override suspend fun load(path: String) = withContext(Dispatchers.IO) {
@@ -24,19 +29,24 @@ class WhisperEngine(
         require(File(path).isFile) { "whisper model not found: $path" }
         unload()
         NativeBridge.initBackends(nativeDir)
-        handle = NativeBridge.whisperLoad(path)
+        val h = NativeBridge.whisperLoad(path)
+        lock.write { handle = h }
     }
 
     override fun transcribe(pcm: FloatArray, prompt: String?): String {
-        val h = handle
-        check(h != 0L) { "whisper model not loaded" }
-        return NativeBridge.whisperTranscribe(h, pcm, threads, beam, prompt)
+        return lock.read {
+            val h = handle
+            check(h != 0L) { "whisper model not loaded" }
+            NativeBridge.whisperTranscribe(h, pcm, threads, beam, prompt)
+        }
     }
 
-    @Synchronized override fun unload() {
-        val h = handle
-        handle = 0L
-        if (h != 0L) NativeBridge.whisperFree(h)
+    override fun unload() {
+        lock.write {
+            val h = handle
+            handle = 0L
+            if (h != 0L) NativeBridge.whisperFree(h)
+        }
     }
 }
 
@@ -48,6 +58,10 @@ class FallbackSttEngine(private val primary: SttEngine, private val fallback: St
     @Volatile private var usePrimary = false
     @Volatile var lastError: Throwable? = null; private set
     val isReal: Boolean get() = usePrimary
+    /** Thread count of the real engine (no-op for other primaries). */
+    var threads: Int
+        get() = (primary as? WhisperEngine)?.threads ?: 0
+        set(v) { (primary as? WhisperEngine)?.threads = v }
 
     override suspend fun load(path: String) {
         usePrimary = false

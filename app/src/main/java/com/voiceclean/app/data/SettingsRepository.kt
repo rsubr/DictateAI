@@ -10,7 +10,7 @@ private val Context.dataStore by preferencesDataStore(name = "settings")
 
 data class Settings(
     val llmBackend: String = "llama.cpp", // "llama.cpp" | "executorch-qnn" (stub)
-    val threads: Int = 4,
+    val threads: Int = com.voiceclean.app.diag.CpuInfo.defaultThreads(),
     val contextSize: Int = 4096,
     val autoCleanup: Boolean = true,
     val activeSttModel: String = "",

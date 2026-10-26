@@ -22,9 +22,8 @@ class CleanupService(
     suspend fun run(raw: String, style: Style, onPartial: (String) -> Unit = {}): CleanupResult {
         val base = raw.trim()
         if (base.isEmpty() || style == Style.Original) return CleanupResult(base, style)
-        val family = ModelFamily.detect(modelName())
-        val prompt = promptBuilder.render(style, base, family)
-        val params = promptBuilder.params(style, base)
+        val name = modelName()
+        val (prompt, params) = promptBuilder.request(style, base, ModelFamily.detect(name), name)
         val sb = StringBuilder()
         engine().generate(prompt, params).collect { piece ->
             sb.append(piece)
