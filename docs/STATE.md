@@ -146,3 +146,14 @@ Tunables: `WhisperEngine.minAudioCtx=500, ctxMarginFrames=50, finalFullContext=t
 Verified: JVM tests (my 18 stt tests incl. two-tier replace, gating, adaptive cadence, beam-when-fast, buffering while loading, TTFT) green; assembleDebug green; JNI symbols present. NOT verified: any on-device speed (no device). Whether partial audio_ctx>=500 hurts accuracy, and which flash_attn mode wins, are unknown until a report.
 Note: full test run currently fails only in the Home agent's `DictationInsertTest.replacementDoesNotRestoreSelectionButBlankRemoves` (not mine).
 Look for in next report (Copy debug log): `STT: whisper ready ... warmup=..ms`, `STT: decode partial/final ... ms=` lines (target partial < ~1 s for base.en/small.en), `Stream: time-to-first-text`, self-test partial #1 vs #2 vs final RTF, flash_attn benchmark rows. If partials are still > cadence, lower `minAudioCtx`, use base.en, or fewer threads; if finals are slow, set `finalFullContext=false`.
+
+## ExecuTorch + QNN backend (QNN agent, 2026-10-26)
+- [x] `llm/ExecuTorchQnnEngine.kt` (LlmModule type 4, streaming Flow, cancel via stop(), `companion availability(context, modelPath?)`), `llm/QnnModelInfo.kt` (+ JVM tests), `llm/FallbackLlmEngine.kt` split out of the old stub file.
+- [x] Deps in app/build.gradle.kts, manifest `uses-native-library libcdsprpc.so`, AppContainer passes `(appContext, httpClient)`, 3 catalog entries (Qwen3 1.7B QNN SM8650/8750/8850), ModelsTest accepts `.pte`. testDebugUnitTest + assembleDebug green; APK 134 MB (+68 MB).
+- [ ] NOT run on any device. Open risks (details docs/QNN.md, D36): no .pte README (QNN SDK version unknown), runtime 2.39.3 vs ET 1.5.1 built on 2.37, JNI hardcodes `llama3` decoder for Qwen3, SM8750 and SM8850 .pte are identical files.
+- Hookups still needed (files owned by others): Settings backend picker should call `ExecuTorchQnnEngine.availability(ctx)` to show/disable "executorch-qnn" and display the reason; Models screen should hide `.pte` entries whose SM tag != device SoC and the custom-model dialog is GGUF-only; selecting a `.pte` with backend llama.cpp (or `.gguf` with qnn) currently just falls back to the fake engine with lastError set; pick backend by file extension in `createLlmEngine` callers.
+
+## Session: cleanup optional / device profile / QNN hookups
+- autoCleanup default false; Home banner only requires STT; rewrite chips disabled without LLM (already gated by llmAvailable).
+- diag/DeviceProfile (SoC tier -> recommended Whisper models) shown in Settings; added small/medium.en Q8_0 to catalog.
+- LLM backend now chosen by file type via llm/RoutingLlmEngine (.pte -> QNN, else llama.cpp); backend chip removed from Settings; Models screen hides .pte for other SoCs. See docs/QNN.md. APK 134MB. Nothing run on device.

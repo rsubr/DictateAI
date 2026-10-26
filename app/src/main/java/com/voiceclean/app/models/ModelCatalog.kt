@@ -48,6 +48,16 @@ object ModelCatalog {
             setOf(ModelTag.BALANCED), "c6138d6d58ecc8322097e0f987c32f1be8bb0a18532a3f88f734d1bbf9c41e5d",
         ),
         CatalogModel(
+            "stt-small-en-q8_0", ModelKind.STT, "Whisper small.en (Q8_0)", "ggerganov/whisper.cpp", "ggml-small.en-q8_0.bin",
+            264_477_561, "Q8_0", 500, "Near-identical accuracy to small.en F16 at about half the size and memory.",
+            setOf(ModelTag.BALANCED), "67a179f608ea6114bd3fdb9060e762b588a3fb3bd00c4387971be4d177958067",
+        ),
+        CatalogModel(
+            "stt-medium-en-q8_0", ModelKind.STT, "Whisper medium.en (Q8_0)", "ggerganov/whisper.cpp", "ggml-medium.en-q8_0.bin",
+            823_382_461, "Q8_0", 1300, "High accuracy English model at about half the size of F16.",
+            setOf(ModelTag.ACCURACY), "43fa2cd084de5a04399a896a9a7a786064e221365c01700cea4666005218f11c",
+        ),
+        CatalogModel(
             "stt-medium-en", ModelKind.STT, "Whisper medium.en", "ggerganov/whisper.cpp", "ggml-medium.en.bin",
             1_533_774_781, "F16", 2000, "High accuracy English model. Slow on phones for live use.",
             setOf(ModelTag.ACCURACY), "cc37e93478338ec7700281a7ac30a10128929eb8f427dda2e865faa8f6da4356",
@@ -97,6 +107,25 @@ object ModelCatalog {
             "llm-qwen3-1.7b-q8_0", ModelKind.LLM, "Qwen3 1.7B (Q8_0)", "Qwen/Qwen3-1.7B-GGUF", "Qwen3-1.7B-Q8_0.gguf",
             1_834_426_016, "Q8_0", 2400, "Fast cleanup on mid-range chips; lower rewrite quality.",
             setOf(ModelTag.FASTER), "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a",
+        ),
+        // ---- ExecuTorch + Qualcomm QNN (.pte, Hexagon NPU; l3utterfly/Qwen-3-1.7B-qnn-executorch, sizes/SHA256 via HF tree API 2026-10-26, see docs/QNN.md) ----
+        CatalogModel(
+            "llm-qnn-qwen3-1.7b-sm8650", ModelKind.LLM, "Qwen3 1.7B QNN (SM8650, 8 Gen 3)", "l3utterfly/Qwen-3-1.7B-qnn-executorch",
+            "Qwen-3-1.7B.SM8650.pte", 2_403_955_732, "QNN HTP", 2600,
+            "Experimental. Runs on the Hexagon NPU via ExecuTorch; only for Snapdragon 8 Gen 3 (e.g. Galaxy S24). Needs the ExecuTorch-QNN backend.",
+            emptySet(), "98100b2e264c073633d5a02f1f669867acee4c527616635d36f21871f7b96fc1",
+        ),
+        CatalogModel(
+            "llm-qnn-qwen3-1.7b-sm8750", ModelKind.LLM, "Qwen3 1.7B QNN (SM8750, 8 Elite)", "l3utterfly/Qwen-3-1.7B-qnn-executorch",
+            "Qwen-3-1.7B.SM8750.pte", 2_403_185_684, "QNN HTP", 2600,
+            "Experimental. Runs on the Hexagon NPU via ExecuTorch; only for Snapdragon 8 Elite (e.g. Galaxy S25). Needs the ExecuTorch-QNN backend.",
+            emptySet(), "16a51f81b1aed6391d4bac3446e2f9724b1ae0bcf0101614a03b1953e4739ee9",
+        ),
+        CatalogModel(
+            "llm-qnn-qwen3-1.7b-sm8850", ModelKind.LLM, "Qwen3 1.7B QNN (SM8850, 8 Elite Gen 5)", "l3utterfly/Qwen-3-1.7B-qnn-executorch",
+            "Qwen-3-1.7B.SM8850.pte", 2_403_185_684, "QNN HTP", 2600,
+            "Experimental. Same bytes as the SM8750 file on the Hub (unverified for Hexagon V81). Needs the ExecuTorch-QNN backend.",
+            emptySet(), "16a51f81b1aed6391d4bac3446e2f9724b1ae0bcf0101614a03b1953e4739ee9",
         ),
     )
 

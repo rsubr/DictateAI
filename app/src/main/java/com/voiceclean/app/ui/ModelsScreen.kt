@@ -68,7 +68,7 @@ fun ModelsScreen(container: AppContainer) {
                 item {
                     Text(kind.label, style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 8.dp))
                 }
-                items(entries.filter { it.model.kind == kind }, key = { it.model.id }) { e ->
+                items(entries.filter { it.model.kind == kind && (!it.model.fileName.endsWith(".pte") || it.installed || socMatches(it.model.fileName)) }, key = { it.model.id }) { e ->
                     ModelCard(
                         e,
                         onDownload = { startDownload(e.model) },
@@ -273,4 +273,11 @@ private fun CustomModelDialog(
         confirmButton = { TextButton(onClick = { onAdd(input, file, kind) }, enabled = !busy && input.isNotBlank()) { Text("Validate and add") } },
         dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Close") } },
     )
+}
+
+/** QNN .pte files are compiled for one SoC; hide entries for other chips (installed ones stay visible). */
+private fun socMatches(fileName: String): Boolean {
+    val tag = com.voiceclean.app.llm.QnnModelInfo.socTag(fileName) ?: return true
+    val dev = com.voiceclean.app.llm.QnnModelInfo.normalizeSoc(if (android.os.Build.VERSION.SDK_INT >= 31) android.os.Build.SOC_MODEL else null)
+    return dev == null || dev == tag
 }

@@ -12,7 +12,7 @@ data class Settings(
     val llmBackend: String = "llama.cpp", // "llama.cpp" | "executorch-qnn" (stub)
     val threads: Int = com.voiceclean.app.diag.CpuInfo.defaultThreads(),
     val contextSize: Int = 4096,
-    val autoCleanup: Boolean = true,
+    val autoCleanup: Boolean = false,
     val activeSttModel: String = "",
     val activeLlmModel: String = "",
     /** Whisper flash attention: "auto" (benchmark once per model), "on", "off". Applies at next STT load. */

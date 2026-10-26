@@ -23,7 +23,7 @@ class ModelsTest {
         ModelCatalog.models.forEach {
             assertTrue(it.sizeBytes > 10_000_000)
             assertEquals(64, it.sha256?.length)
-            assertTrue(it.fileName.endsWith(if (it.kind == ModelKind.LLM) ".gguf" else ".bin"))
+            assertTrue(it.fileName.endsWith(if (it.kind == ModelKind.LLM) ".gguf" else ".bin") || (it.kind == ModelKind.LLM && it.fileName.endsWith(".pte")))
             assertTrue(it.url.startsWith("https://huggingface.co/${it.repo}/resolve/main/"))
         }
         assertTrue(ModelCatalog.byKind(ModelKind.STT).size >= 4 && ModelCatalog.byKind(ModelKind.LLM).size >= 5)

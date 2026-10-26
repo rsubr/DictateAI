@@ -75,6 +75,10 @@ dependencies {
     implementation(libs.androidx.datastore.preferences)
     implementation(libs.okhttp)
     implementation(libs.kotlinx.coroutines.android)
+    // ExecuTorch LLM runtime with the Qualcomm QNN delegate (BSD) + Qualcomm QNN runtime libs (Qualcomm AI Hub Model License,
+    // redistributable from Maven Central; see docs/QNN.md). Version override: -PqnnRuntimeVersion=2.37.0 to pin the version ExecuTorch was built with
+    implementation("org.pytorch:executorch-android-qnn:1.5.1")
+    implementation("com.qualcomm.qti:qnn-runtime:${providers.gradleProperty("qnnRuntimeVersion").getOrElse("2.39.3")}")
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")

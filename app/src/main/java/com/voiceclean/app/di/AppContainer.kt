@@ -27,14 +27,15 @@ class AppContainer(context: Context) {
             it.ensureLoaded = { engineProvider.ensureSttLoaded() }
         }
     }
-    /** Picks the LLM engine for a settings backend id ("llama.cpp" | "executorch-qnn"). */
-    fun createLlmEngine(backendId: String): LlmEngine = com.voiceclean.app.llm.FallbackLlmEngine(
-        when (backendId) {
-            "executorch-qnn" -> com.voiceclean.app.llm.ExecuTorchQnnEngine()
-            else -> com.voiceclean.app.llm.LlamaCppEngine(appContext)
-        }, FakeLlmEngine(),
-    )
-    val llmEngine: LlmEngine by lazy { createLlmEngine("llama.cpp") }
+    /** Backend is chosen per model file: `.pte` -> ExecuTorch-QNN, GGUF -> llama.cpp. */
+    val llmEngine: LlmEngine by lazy {
+        com.voiceclean.app.llm.FallbackLlmEngine(
+            com.voiceclean.app.llm.RoutingLlmEngine(
+                com.voiceclean.app.llm.LlamaCppEngine(appContext),
+                com.voiceclean.app.llm.ExecuTorchQnnEngine(appContext, httpClient),
+            ), FakeLlmEngine(),
+        )
+    }
     private val appScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Default)
     /** Loads the real engines lazily on the active models (see [RealEngineProvider]). */
     val engineProvider: EngineProvider by lazy {

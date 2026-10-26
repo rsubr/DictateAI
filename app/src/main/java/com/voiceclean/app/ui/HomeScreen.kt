@@ -103,8 +103,8 @@ fun HomeScreen(
                     }
                 }
             }
-            if (!s.sttAvailable || !s.llmAvailable) {
-                ModelsBanner(needStt = !s.sttAvailable, needLlm = !s.llmAvailable, onGoToModels)
+            if (!s.sttAvailable) {
+                ModelsBanner(needStt = true, needLlm = !s.llmAvailable, onGoToModels)
                 Spacer(Modifier.height(8.dp))
             }
 
@@ -179,7 +179,7 @@ private fun ModelsBanner(needStt: Boolean, needLlm: Boolean, onGoToModels: () ->
                 when {
                     needStt && needLlm -> "Download a speech model and a language model to get started."
                     needStt -> "Download a speech (Whisper) model to dictate."
-                    else -> "Download a language model to clean up and rewrite text."
+                    else -> "Optional: download a cleanup model to enable the rewrite buttons."
                 },
                 Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium,
             )

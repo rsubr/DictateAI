@@ -25,11 +25,12 @@ fun SettingsScreen(container: AppContainer) {
     val s by repo.settings.collectAsStateWithLifecycle(Settings())
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Settings", style = MaterialTheme.typography.headlineMedium)
-        Text("LLM backend")
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(s.llmBackend == "llama.cpp", { scope.launch { repo.setBackend("llama.cpp") } }, { Text("llama.cpp") })
-            FilterChip(false, {}, { Text("ExecuTorch-QNN (coming soon)") }, enabled = false)
-        }
+        val ctx = androidx.compose.ui.platform.LocalContext.current
+        val qnnReason = remember { com.voiceclean.app.llm.ExecuTorchQnnEngine.availability(ctx) }
+        Text("Language-model backend: chosen by model type (GGUF -> llama.cpp, .pte -> ExecuTorch-QNN).", style = MaterialTheme.typography.bodySmall)
+        Text("ExecuTorch-QNN: " + (qnnReason ?: "available"), style = MaterialTheme.typography.bodySmall)
+        RecommendedSpeechModels(container)
+        HorizontalDivider()
         Text("Threads: ${s.threads}")
         Slider(s.threads.toFloat(), { scope.launch { repo.setThreads(it.toInt()) } }, valueRange = 1f..8f, steps = 6)
         Text("Context size: ${s.contextSize}")
@@ -48,6 +49,35 @@ fun SettingsScreen(container: AppContainer) {
         HorizontalDivider()
         DiagnosticsSection(container)
     }
+}
+
+@Composable
+private fun RecommendedSpeechModels(container: AppContainer) {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    val profile = remember { com.voiceclean.app.diag.DeviceProfile.detect(ctx) }
+    val repo = container.modelRepository
+    val entries by repo.entries.collectAsStateWithLifecycle(emptyList())
+    val scope = rememberCoroutineScope()
+    Text("Recommended speech models", style = MaterialTheme.typography.titleLarge)
+    Text("Detected: ${profile.summary}", style = MaterialTheme.typography.bodySmall)
+    profile.recommendedStt.forEachIndexed { i, id ->
+        val e = entries.firstOrNull { it.model.id == id } ?: return@forEachIndexed
+        Card(Modifier.fillMaxWidth()) {
+            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(e.model.displayName + if (i == 0) "  (best for this phone)" else "", style = MaterialTheme.typography.titleSmall)
+                    Text("${e.model.sizeBytes / 1_000_000} MB - ${e.model.description}", style = MaterialTheme.typography.bodySmall)
+                }
+                when {
+                    e.active -> Text("In use")
+                    e.installed -> OutlinedButton({ scope.launch { repo.select(e.model) } }) { Text("Use") }
+                    e.download != null -> Text("Downloading...")
+                    else -> Button({ repo.download(e.model) }) { Text("Download") }
+                }
+            }
+        }
+    }
+    if (profile.qualcomm) Text("Qualcomm SoC detected: the ExecuTorch-QNN language-model backend may be usable (see Models).", style = MaterialTheme.typography.bodySmall)
 }
 
 @Composable
