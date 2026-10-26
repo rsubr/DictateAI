@@ -33,6 +33,7 @@ import androidx.compose.ui.text.input.OffsetMapping
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.TransformedText
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.voiceclean.app.data.MIN_FONT_SP
@@ -137,8 +138,10 @@ fun HomeScreen(
                                 s.sttAvailable -> "Tap the mic and start talking, or type here.\nDictation is inserted at the cursor."
                                 else -> "Download a speech model to start dictating."
                             },
-                            style = MaterialTheme.typography.bodyLarge,
+                            // Same style as the editor so the placeholder tracks the font-size setting.
+                            style = MaterialTheme.typography.bodyLarge.copy(fontSize = fontSp.sp, lineHeight = (fontSp * 1.4f).sp),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center,
                             modifier = Modifier.align(Alignment.Center),
                         )
                     } else if (s.recording && s.loadingModel) {
