@@ -106,5 +106,5 @@ dependencies {
     implementation("com.qualcomm.qti:qnn-runtime:${providers.gradleProperty("qnnRuntimeVersion").getOrElse("2.39.3")}")
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
-    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    testImplementation("com.squareup.okhttp3:mockwebserver:5.3.2")
 }
