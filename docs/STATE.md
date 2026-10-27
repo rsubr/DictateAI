@@ -164,3 +164,8 @@ Look for in next report (Copy debug log): `STT: whisper ready ... warmup=..ms`, 
 - D41 settled: editor has sentence auto-capitalization, spell-check and autocorrect (keyboardOptions in HomeScreen TextEditor; NOT verified on device, IME-dependent); box stays read-only during dictation/finishing/rewrite (final).
 - Known issues: fast-stop trades a little accuracy of the last utterance (partial-quality text) for speed; break pressed before any speech is ignored; no LICENSE file; branch protection not configured.
 - Next steps: on-device check of stop latency and keyboard/caret behaviour; decide items 2 and 5 with the user; consider a LICENSE.
+
+## Dependency bumps (2026-10-27, v0.3.0 re-release)
+- Merged Dependabot PR #1 (GitHub Actions: checkout v7, setup-java v6, setup-gradle v6, upload-artifact v7; CI green). Local `testDebugUnitTest assembleDebug` green. Not device-tested.
+- Skipped PR #2 (gradle group, 16 updates): CI fails (AGP 9 rejects the `org.jetbrains.kotlin.android` plugin) and it mixes major jumps (AGP 9, Gradle 9, Kotlin 2.4, OkHttp 5, Compose BOM 2026, Room 2.8). Needs a staged migration; left open.
+- First v0.3.0 release run failed at "Publish release" with a transient GitHub HTTP 500; v0.3.0 re-tagged.
