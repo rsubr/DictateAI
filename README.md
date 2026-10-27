@@ -66,6 +66,9 @@ One-time setup, repo Settings > Secrets and variables > Actions:
 
 You can also run the workflow manually (Actions tab); the APK is then kept as a workflow artifact. Bump `versionCode`/`versionName` in `app/build.gradle.kts` before tagging.
 
+## Repository automation
+CI (`.github/workflows/ci.yml`) runs unit tests and a debug build on every push to master and on pull requests. Dependabot opens weekly grouped updates for Gradle and GitHub Actions. See also `SECURITY` policy in `.github/SECURITY.md`. No LICENSE file has been chosen yet.
+
 ## Where models are stored
 `/sdcard/Android/data/com.voiceclean.app/files/models/{stt,llm}/` (app-specific storage). Android deletes this folder when the app is uninstalled.
 

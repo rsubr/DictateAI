@@ -23,7 +23,12 @@ import java.util.concurrent.atomic.AtomicInteger
  * finished utterances still waiting for their accurate re-decode plus the provisional text of the current utterance.
  */
 data class Transcript(val committed: String = "", val partial: String = "") {
-    val full: String get() = listOf(committed, partial).filter { it.isNotBlank() }.joinToString(" ")
+    val full: String get() = when {
+        partial.isBlank() -> committed
+        committed.isBlank() -> partial
+        committed.endsWith("\n") -> committed + partial   // paragraph break requested by the user
+        else -> "$committed $partial"
+    }
 }
 
 /**
@@ -67,6 +72,14 @@ class StreamingTranscriber(
         val cadenceGapFactor: Float = 0.5f,
         /** Keep at most this much trailing silence in an utterance sent to the final decode. */
         val finalTrailingSilenceSec: Float = 0.3f,
+        /**
+         * On stop, reuse the latest provisional text of the unfinished utterance instead of re-decoding it at full
+         * context when at most [fastStopTailSec] of speech arrived since that partial decode (the main cause of the
+         * lag after releasing the mic). If more speech is unprocessed, only that window is decoded, greedy and with
+         * the reduced (fast) context.
+         */
+        val fastStop: Boolean = true,
+        val fastStopTailSec: Float = 1.0f,
     )
 
     private val _transcript = MutableStateFlow(Transcript())
@@ -95,15 +108,51 @@ class StreamingTranscriber(
 
     private class Req(
         val pcm: FloatArray, val speechSec: Float, val utt: Int, val final: Boolean, val windowSec: Float,
+        /** Final decode of the last window at stop: use the fast (partial) decode options. */
+        val fast: Boolean = false,
     )
 
     /** Provisional text per utterance still waiting for its final decode; guarded by `lock`. */
     private val lock = Any()
     private val provisional = LinkedHashMap<Int, String>()
     private var committed = ""
+    /** Utterance ids followed by a user-requested paragraph break. */
+    private val breaks = HashSet<Int>()
+    @Volatile private var breakRequested = false
+
+    /** Appends the final [text] of utterance [utt] to [committed] (caller holds `lock`). */
+    private fun commit(utt: Int, text: String) {
+        if (text.isNotEmpty()) {
+            committed = when {
+                committed.isEmpty() -> text
+                committed.endsWith("\n") -> committed + text
+                else -> "$committed $text"
+            }
+        }
+        if (utt in breaks && committed.isNotEmpty() && !committed.endsWith("\n")) committed += "\n\n"
+    }
+
+    /** Provisional texts in utterance order, joined with a paragraph break after the utterances that have one. */
+    private fun provisionalText(): String {
+        val sb = StringBuilder()
+        var pendingBreak = false
+        for ((u, t) in provisional) {
+            if (t.isBlank()) { if (u in breaks) pendingBreak = true; continue }
+            if (sb.isNotEmpty()) sb.append(if (pendingBreak) "\n\n" else " ")
+            sb.append(t)
+            pendingBreak = u in breaks
+        }
+        return sb.toString()
+    }
+
+    /**
+     * Ends the current paragraph: finalizes the utterance in progress and puts a blank line after it. Takes effect on
+     * the next audio chunk (~100 ms). Ignored while nothing has been dictated yet.
+     */
+    fun insertBreak() { breakRequested = true }
 
     private fun publish() {
-        val t = synchronized(lock) { Transcript(committed, provisional.values.filter { it.isNotBlank() }.joinToString(" ")) }
+        val t = synchronized(lock) { Transcript(committed, provisionalText()) }
         _transcript.value = t
         if (timeToFirstTextMs < 0 && t.full.isNotBlank()) {
             timeToFirstTextMs = clockMs() - startedAtMs
@@ -115,7 +164,8 @@ class StreamingTranscriber(
     fun start(scope: CoroutineScope, audio: Flow<FloatArray>): Job {
         check(session?.isActive != true) { "already running" }
         stopRequested = false
-        synchronized(lock) { provisional.clear(); committed = "" }
+        synchronized(lock) { provisional.clear(); committed = ""; breaks.clear() }
+        breakRequested = false
         _transcript.value = Transcript()
         _autoStopped.value = false
         _error.value = null
@@ -153,8 +203,8 @@ class StreamingTranscriber(
                     val prompt = synchronized(lock) { committed }.takeLast(config.promptChars).trim().ifEmpty { null }
                     // full-context finals cost roughly 3x a reduced-context partial when no final was measured yet
                     val estRtf = if (finalRtf >= 0f) finalRtf else if (partialRtf >= 0f) partialRtf * 3f else -1f
-                    val beam = if (!r.final) 1 else if (estRtf in 0f..config.fastRtf) config.finalBeam else 1
-                    val opts = DecodeOpts(partial = !r.final, beam = beam)
+                    val beam = if (!r.final || r.fast) 1 else if (estRtf in 0f..config.fastRtf) config.finalBeam else 1
+                    val opts = DecodeOpts(partial = !r.final || r.fast, beam = beam)
                     val t0 = clockMs()
                     val raw = withContext(dispatcher) { engine.transcribe(r.pcm, prompt, opts) }
                     val ms = clockMs() - t0
@@ -167,7 +217,7 @@ class StreamingTranscriber(
                         log("final utt#${r.utt} window=${"%.1f".format(r.windowSec)}s speech=${"%.1f".format(r.speechSec)}s beam=$beam ms=$ms")
                         synchronized(lock) {
                             provisional.remove(r.utt)
-                            if (text.isNotEmpty()) committed = if (committed.isEmpty()) text else "$committed $text"
+                            commit(r.utt, text)
                         }
                     } else {
                         adaptiveIntervalSec = maxOf(config.decodeIntervalSec, ms / 1000f * config.cadenceGapFactor)
@@ -183,7 +233,7 @@ class StreamingTranscriber(
                     _error.value = e
                     if (r.final) synchronized(lock) {  // keep what the user already saw instead of losing it
                         val p = provisional.remove(r.utt).orEmpty()
-                        if (p.isNotBlank()) committed = if (committed.isEmpty()) p else "$committed $p"
+                        commit(r.utt, p.trim())
                     }
                 } finally {
                     pending.decrementAndGet()
@@ -202,13 +252,13 @@ class StreamingTranscriber(
         var smooth = 0f
         val finalTrailing = (config.finalTrailingSilenceSec * SAMPLE_RATE).toInt()
 
-        fun submit(final: Boolean) {
+        fun submit(final: Boolean, fast: Boolean = false) {
             var n = len
             if (final && trailingSilence > finalTrailing) n = (len - (trailingSilence - finalTrailing)).coerceAtLeast(1)
             val pcm = window.copyOf(n)
             pending.incrementAndGet()
             speechAtLastDecode = speechSamples
-            queue.trySend(Req(pcm, speechSamples.toFloat() / SAMPLE_RATE, currentUtt.get(), final, n.toFloat() / SAMPLE_RATE))
+            queue.trySend(Req(pcm, speechSamples.toFloat() / SAMPLE_RATE, currentUtt.get(), final, n.toFloat() / SAMPLE_RATE, fast))
         }
         fun resetWindow() {
             len = 0; speechSamples = 0; speechAtLastDecode = 0; trailingSilence = 0; sinceDecode = 0
@@ -238,6 +288,19 @@ class StreamingTranscriber(
                         trailingSilence += chunk.size; sinceSpeechTotal += chunk.size
                     }
 
+                    val forceBreak = breakRequested.also { breakRequested = false }
+                    if (forceBreak && speechSamples < minSpeechSamples) {
+                        // nothing in the current window: the paragraph ends after the previous utterance
+                        val prev = currentUtt.get() - 1
+                        synchronized(lock) {
+                            if (prev >= 0) {
+                                breaks.add(prev)
+                                if (!provisional.containsKey(prev) && committed.isNotEmpty() && !committed.endsWith("\n")) committed += "\n\n"
+                            }
+                        }
+                        publish()
+                    }
+
                     if (speechSamples < minSpeechSamples) {
                         // gate: nothing worth decoding yet, keep only a short pre-roll
                         if (len > prerollSamples + chunk.size) {
@@ -246,8 +309,9 @@ class StreamingTranscriber(
                             len -= drop
                         }
                         sinceDecode = 0
-                    } else if (trailingSilence >= finalizeSamples || len >= maxSamples) {
+                    } else if (forceBreak || trailingSilence >= finalizeSamples || len >= maxSamples) {
                         val utt = currentUtt.get()
+                        if (forceBreak) synchronized(lock) { breaks.add(utt) }
                         submit(true)
                         resetWindow()
                         // keep the finished utterance's provisional text on screen until its final replaces it
@@ -271,7 +335,18 @@ class StreamingTranscriber(
             collectJob = collector
             collector.join()
             // flush the pending window
-            if (speechSamples >= minSpeechSamples && len > 0) submit(true)
+            if (speechSamples >= minSpeechSamples && len > 0) {
+                val utt = currentUtt.get()
+                val shown = synchronized(lock) { provisional[utt] }
+                val tailSec = (speechSamples - speechAtLastDecode).toFloat() / SAMPLE_RATE
+                if (config.fastStop && !shown.isNullOrBlank() && tailSec <= config.fastStopTailSec) {
+                    // the partial already covers (almost) everything: promote it, no re-decode
+                    log("fast stop: reusing provisional text of utt#$utt (tail=${"%.2f".format(tailSec)}s)")
+                    synchronized(lock) { provisional.remove(utt); commit(utt, shown.trim()) }
+                } else {
+                    submit(true, fast = config.fastStop)
+                }
+            }
         } finally {
             queue.close()
             worker.join()

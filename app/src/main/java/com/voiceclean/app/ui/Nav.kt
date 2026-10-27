@@ -1,5 +1,7 @@
 package com.voiceclean.app.ui
 
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -52,7 +54,7 @@ fun VoiceCleanNav(container: AppContainer) {
             }
         },
     ) { pad ->
-        NavHost(nav, startDestination = Dest.Home.route, modifier = Modifier.padding(pad)) {
+        NavHost(nav, startDestination = Dest.Home.route, modifier = Modifier.padding(pad).consumeWindowInsets(pad).imePadding()) {
             composable(Dest.Home.route) { HomeScreen(container, openRequest, onGoToModels = { goTo(Dest.Models.route) }) }
             composable(Dest.History.route) { HistoryScreen(container, onOpen = { openRequest.value = it; goTo(Dest.Home.route) }) }
             composable(Dest.Models.route) { ModelsScreen(container) }

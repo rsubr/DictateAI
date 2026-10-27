@@ -134,6 +134,7 @@ fun HomeScreen(
                         Text(
                             when {
                                 s.recording && s.loadingModel -> "Loading speech model..."
+                                s.finishing -> "Finishing..."
                                 s.recording -> "Listening..."
                                 s.sttAvailable -> "Tap the mic and start talking, or type here.\nDictation is inserted at the cursor."
                                 else -> "Download a speech model to start dictating."
@@ -177,9 +178,15 @@ fun HomeScreen(
                     onClick = { clipboard.setText(AnnotatedString(vm.copyText())); scope.launch { snackbar.showSnackbar("Copied to clipboard") } },
                     enabled = s.hasText && !s.recording, modifier = Modifier.size(52.dp),
                 ) { Icon(Icons.Filled.ContentCopy, "Copy") }
-                MicButton(recording = s.recording, busy = s.recording && s.loadingModel, level = s.level, enabled = s.sttAvailable, onClick = ::onMic)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    MicButton(recording = s.recording, busy = (s.recording && s.loadingModel) || s.finishing, level = s.level,
+                        enabled = s.sttAvailable && !s.finishing, onClick = ::onMic)
+                    FilledTonalIconButton(
+                        onClick = vm::insertNewLine, enabled = !s.finishing && !s.cleaning, modifier = Modifier.size(52.dp),
+                    ) { Icon(Icons.Filled.KeyboardReturn, "New line") }
+                }
                 FilledTonalIconButton(
-                    onClick = vm::newSession, enabled = s.hasText || s.recording, modifier = Modifier.size(52.dp),
+                    onClick = vm::newSession, enabled = (s.hasText || s.recording) && !s.finishing, modifier = Modifier.size(52.dp),
                 ) { Icon(Icons.Filled.Clear, "Clear") }
             }
         }
@@ -225,19 +232,27 @@ private fun TextEditor(s: HomeUiState, vm: HomeViewModel, fontSp: Int) {
     var viewport by remember { mutableIntStateOf(0) }
     val dim = SpanStyle(color = color.copy(alpha = 0.45f), fontStyle = FontStyle.Italic)
     val transformation = remember(s.provisional, color) { ProvisionalTransformation(s.provisional, dim) }
-    // Keep the caret / inserted text in view while dictation or a rewrite streams in.
-    LaunchedEffect(s.box.text, s.box.selection, layout, viewport, s.recording, s.cleaning) {
-        if (!s.recording && !s.cleaning) return@LaunchedEffect
+    // Keep the caret in view whenever it moves (typing, dictation, rewrite) or the viewport shrinks (keyboard opens).
+    LaunchedEffect(s.box.text, s.box.selection, layout, viewport) {
         val l = layout ?: return@LaunchedEffect
-        val caret = s.box.selection.end.coerceIn(0, s.box.text.length)
-        val bottom = l.getCursorRect(caret).bottom.toInt()
-        scroll.animateScrollTo((bottom - viewport + 24).coerceIn(0, scroll.maxValue))
+        if (viewport <= 0) return@LaunchedEffect
+        val caret = s.box.selection.end.coerceIn(0, l.layoutInput.text.length)
+        val rect = l.getCursorRect(caret)
+        val margin = 24
+        val top = scroll.value
+        val bottom = top + viewport
+        val target = when {
+            rect.bottom + margin > bottom -> rect.bottom.toInt() + margin - viewport
+            rect.top - margin < top -> rect.top.toInt() - margin
+            else -> return@LaunchedEffect
+        }
+        scroll.animateScrollTo(target.coerceIn(0, scroll.maxValue))
     }
     Box(Modifier.fillMaxSize().onSizeChanged { viewport = it.height }.verticalScroll(scroll)) {
         BasicTextField(
             value = s.box,
             onValueChange = vm::onFieldChanged,
-            readOnly = s.recording || s.cleaning,
+            readOnly = s.recording || s.cleaning || s.finishing,
             textStyle = MaterialTheme.typography.bodyLarge.copy(color = color, fontSize = fontSp.sp, lineHeight = (fontSp * 1.4f).sp),
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
             visualTransformation = transformation,

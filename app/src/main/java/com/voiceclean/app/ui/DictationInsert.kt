@@ -24,13 +24,15 @@ object DictationInsert {
     fun apply(oldText: String, anchor: Int, selEnd: Int, insertedPrev: Int, dictation: String): InsertResult {
         val a = anchor.coerceIn(0, oldText.length)
         val end = (if (insertedPrev > 0) a + insertedPrev else selEnd).coerceIn(a, oldText.length)
-        val d = dictation.trim()
+        val core = dictation.trim()
+        // keep a paragraph break requested by the user (blank line) at the end; stray engine newlines are trimmed
+        val d = if (dictation.trimEnd(' ', '\t').endsWith("\n\n") && core.isNotEmpty()) core + "\n\n" else core
         if (d.isEmpty()) {
             return if (insertedPrev > 0) InsertResult(oldText.removeRange(a, end), a, 0, 0, a)
             else InsertResult(oldText, a, 0, 0, end)
         }
         val pre = if (a > 0 && !oldText[a - 1].isWhitespace()) " " else ""
-        val post = if (end < oldText.length && !oldText[end].isWhitespace() && oldText[end] !in NO_SPACE_BEFORE) " " else ""
+        val post = if (end < oldText.length && !d.endsWith('\n') && !oldText[end].isWhitespace() && oldText[end] !in NO_SPACE_BEFORE) " " else ""
         val text = oldText.substring(0, a) + pre + d + post + oldText.substring(end)
         val dictStart = a + pre.length
         return InsertResult(text, dictStart, d.length, pre.length + d.length + post.length, dictStart + d.length)

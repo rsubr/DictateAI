@@ -210,4 +210,41 @@ class StreamingTranscriberTest {
         assertTrue(t.timeToFirstTextMs >= 0)
         assertTrue(logs.any { it.startsWith("time-to-first-text") })
     }
+
+    @Test fun breakEndsParagraphAndStopKeepsIt() = runTest {
+        var afterBreak = false
+        val engine = FakeEngine { _, _ -> if (afterBreak) "second" else "first" }
+        val d = StandardTestDispatcher(testScheduler)
+        val t = StreamingTranscriber(engine, EnergyVad(), dispatcher = d)
+        t.start(this, audio(true to 60_000))
+        delay(2_050)
+        t.insertBreak()
+        delay(1_000)
+        afterBreak = true
+        delay(2_000)
+        val text = t.stop()
+        assertEquals("first\n\nsecond", text)
+    }
+
+    @Test fun trailingBreakIsKept() = runTest {
+        val engine = FakeEngine { _, _ -> "only" }
+        val d = StandardTestDispatcher(testScheduler)
+        val t = StreamingTranscriber(engine, EnergyVad(), dispatcher = d)
+        t.start(this, audio(true to 2_100, false to 60_000))
+        delay(2_050)
+        t.insertBreak()
+        delay(1_500)
+        assertEquals("only\n\n", t.stop())
+    }
+
+    @Test fun fastStopReusesProvisionalWithoutExtraDecode() = runTest {
+        val engine = FakeEngine { _, _ -> "quick" }
+        val d = StandardTestDispatcher(testScheduler)
+        val t = StreamingTranscriber(engine, EnergyVad(), dispatcher = d)
+        t.start(this, audio(true to 60_000))
+        delay(2_050)
+        val before = engine.calls.size
+        assertEquals("quick", t.stop())
+        assertEquals(before, engine.calls.size)
+    }
 }

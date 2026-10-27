@@ -36,6 +36,8 @@ data class HomeUiState(
     val recording: Boolean = false,
     /** Mic is capturing but the speech model is still loading (audio is buffered). */
     val loadingModel: Boolean = false,
+    /** Mic is released; the last audio is still being transcribed. The box is read-only until it lands. */
+    val finishing: Boolean = false,
     val level: Float = 0f,
     /** The one editable text box: text + selection. */
     val box: TextFieldValue = TextFieldValue(""),
@@ -215,10 +217,10 @@ class HomeViewModel(
         transcriber = null
         captureJob?.cancel()
         startJob?.cancel()
-        _state.update { it.copy(recording = false, loadingModel = false, level = 0f, notice = if (auto) "Stopped after a long silence." else it.notice) }
+        _state.update { it.copy(recording = false, loadingModel = false, finishing = true, level = 0f, notice = if (auto) "Stopped after a long silence." else it.notice) }
         durationMs = System.currentTimeMillis() - startedAt
         viewModelScope.launch {
-            val text = t?.stop()?.trim().orEmpty()
+            val text = t?.stop()?.trim { it == ' ' || it == '\t' }.orEmpty()
             container.engineProvider.releaseSttWhenIdle()
             observeJob?.cancel()
             finishSession(text)
@@ -228,13 +230,14 @@ class HomeViewModel(
     /** Finalizes the dictation: [text] is the full dictated text of this session (null = aborted). */
     private suspend fun finishSession(text: String?) {
         if (text.isNullOrBlank()) {
-            _state.update { it.copy(recording = false, loadingModel = false, box = baseValue, provisional = null,
+            _state.update { it.copy(recording = false, loadingModel = false, finishing = false, box = baseValue, provisional = null,
                 notice = if (text != null) "No speech detected." else it.notice) }
             return
         }
         renderDictation(text, 0, final = true)
+        _state.update { it.copy(finishing = false) }
         val st = _state.value
-        val dictStart = (st.box.selection.end - text.length).coerceAtLeast(0)
+        val dictStart = (st.box.selection.end - text.trimEnd().length).coerceAtLeast(0)
         val dictEnd = st.box.selection.end
         historyId = container.historyRepository.add(text, st.box.text, Style.Original.label, durationMs)
         val s: Settings = container.settingsRepository.settings.first()
@@ -298,6 +301,19 @@ class HomeViewModel(
         }
     }
 
+    /**
+     * Paragraph break. While dictating it ends the current paragraph in the transcript (applied within ~100 ms);
+     * otherwise a blank line is inserted at the caret (replacing the selection).
+     */
+    fun insertNewLine() {
+        val st = _state.value
+        if (st.cleaning || st.finishing) return
+        if (st.recording) { transcriber?.insertBreak(); return }
+        val b = st.box
+        val t = b.text.substring(0, b.selection.min) + "\n\n" + b.text.substring(b.selection.max)
+        onFieldChanged(TextFieldValue(t, TextRange(b.selection.min + 2)))
+    }
+
     /** App went to the background: Android blocks background mic capture, so end the session cleanly. */
     fun onAppBackgrounded() {
         if (_state.value.recording) stopRecording()
@@ -315,7 +331,7 @@ class HomeViewModel(
     /** User typed in / moved the caret in the text box (ignored while the box is read-only). */
     fun onFieldChanged(v: TextFieldValue) {
         val st = _state.value
-        if (st.recording || st.cleaning) return
+        if (st.recording || st.cleaning || st.finishing) return
         val textChanged = v.text != st.box.text
         _state.update { it.copy(box = v, undo = if (textChanged) null else it.undo,
             style = if (textChanged) Style.Original else it.style, provisional = null) }
@@ -344,6 +360,7 @@ class HomeViewModel(
     /** Clear (can be undone via [undoClear] while the snackbar is up). */
     fun newSession() {
         val st = _state.value
+        if (st.finishing) return
         val snap = if (st.box.text.isNotEmpty()) Triple(st.box, historyId, st.style) else null
         if (st.recording) {
             val t = transcriber; transcriber = null
