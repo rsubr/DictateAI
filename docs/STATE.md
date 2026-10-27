@@ -161,6 +161,6 @@ Look for in next report (Copy debug log): `STT: whisper ready ... warmup=..ms`, 
 
 ## Session 2026-10-27 (lag / caret / newline / repo hygiene) - v0.3.0
 - Done (D38-D40): fast stop + `finishing` state, paragraph-break button (transcriber `insertBreak`), imePadding + always-on caret scroll, CI workflow, dependabot, SECURITY/PR/issue templates, CODEOWNERS. Version 0.3.0 (code 3). Unit tests + assembleDebug green. NOT verified on device.
-- Pending with user (not implemented, D41): autocapitalize/spell-check in the editor; editing during dictation (read-only today).
+- D41 settled: editor has sentence auto-capitalization, spell-check and autocorrect (keyboardOptions in HomeScreen TextEditor; NOT verified on device, IME-dependent); box stays read-only during dictation/finishing/rewrite (final).
 - Known issues: fast-stop trades a little accuracy of the last utterance (partial-quality text) for speed; break pressed before any speech is ignored; no LICENSE file; branch protection not configured.
 - Next steps: on-device check of stop latency and keyboard/caret behaviour; decide items 2 and 5 with the user; consider a LICENSE.

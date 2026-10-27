@@ -10,6 +10,10 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -256,6 +260,11 @@ private fun TextEditor(s: HomeUiState, vm: HomeViewModel, fontSp: Int) {
             textStyle = MaterialTheme.typography.bodyLarge.copy(color = color, fontSize = fontSp.sp, lineHeight = (fontSp * 1.4f).sp),
             cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
             visualTransformation = transformation,
+            // Typing assistance: sentence capitalization, spell-check squiggles/suggestions and autocorrect (IME-dependent).
+            keyboardOptions = KeyboardOptions(
+                capitalization = KeyboardCapitalization.Sentences, autoCorrectEnabled = true,
+                keyboardType = KeyboardType.Text, imeAction = ImeAction.Default,
+            ),
             onTextLayout = { layout = it },
             modifier = Modifier.fillMaxWidth().defaultMinSize(minHeight = 200.dp),
         )
